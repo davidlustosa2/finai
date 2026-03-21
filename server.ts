@@ -21,12 +21,15 @@ let cards = [
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(cors());
   app.use(express.json());
 
   // API Routes
+  app.get("/healthz", (_req, res) => {
+  res.status(200).json({ ok: true });
+});
   app.get("/api/summary", (req, res) => {
     const totalIncome = transactions.filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
     const totalExpense = transactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
