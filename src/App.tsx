@@ -31,7 +31,8 @@ import {
   ArrowUpDown,
   Filter,
   ChevronDown,
-  LogOut
+  LogOut,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -150,6 +151,7 @@ export default function App() {
   const [editingCategoryInModal, setEditingCategoryInModal] = useState<{name: string, type: string} | null>(null);
   const [newCategoryNameInModal, setNewCategoryNameInModal] = useState('');
   const [addingCategoryType, setAddingCategoryType] = useState<'income' | 'expense' | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [manualCategoryName, setManualCategoryName] = useState('');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
@@ -395,6 +397,7 @@ export default function App() {
 
   const handleCreateCard = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSubmitting(true);
     try {
       await firestoreService.addCard({
         name: newCardName,
@@ -412,11 +415,14 @@ export default function App() {
       fetchData();
     } catch (e) {
       console.error(e);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSubmitting(true);
     const payload = {
       description: transDescription,
       amount: parseCurrency(transAmount),
@@ -442,6 +448,8 @@ export default function App() {
       fetchData();
     } catch (e) {
       console.error(e);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -694,18 +702,20 @@ export default function App() {
     <div className="min-h-screen bg-[#F8F7F4] text-stone-900 font-sans selection:bg-emerald-100">
       {/* Sidebar / Nav */}
       <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur-xl border border-black/5 px-6 py-3 rounded-full shadow-2xl z-50 flex items-center gap-8">
-        <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-full transition-colors ${activeTab === 'dashboard' ? 'bg-stone-900 text-white' : 'text-stone-400 hover:text-stone-600'}`}>
+        <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'dashboard' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
           <LayoutDashboard size={20} />
         </button>
-        <button onClick={() => setActiveTab('transactions')} className={`p-2 rounded-full transition-colors ${activeTab === 'transactions' ? 'bg-stone-900 text-white' : 'text-stone-400 hover:text-stone-600'}`}>
+        <button onClick={() => setActiveTab('transactions')} className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'transactions' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
           <BarChart3 size={20} />
         </button>
-        <button onClick={() => setActiveTab('cards')} className={`p-2 rounded-full transition-colors ${activeTab === 'cards' ? 'bg-stone-900 text-white' : 'text-stone-400 hover:text-stone-600'}`}>
+        <button onClick={() => setActiveTab('cards')} className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'cards' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
           <CreditCard size={20} />
         </button>
+        {/* Aba AI Desativada Temporariamente 
         <button onClick={() => setActiveTab('ai')} className={`p-2 rounded-full transition-colors ${activeTab === 'ai' ? 'bg-stone-900 text-white' : 'text-stone-400 hover:text-stone-600'}`}>
           <MessageSquare size={20} />
         </button>
+        */}
         <div className="w-px h-6 bg-stone-200" />
         <button 
           onClick={logout}
@@ -726,9 +736,9 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button 
               onClick={logout}
-              className="px-4 py-2 bg-white rounded-xl border border-black/5 shadow-sm text-xs font-semibold text-stone-500 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-100 transition-all flex items-center gap-2 group"
+              className="px-4 py-2 bg-white rounded-xl border border-black/5 shadow-sm text-xs font-semibold text-stone-500 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-100 hover:shadow-md hover:scale-105 active:scale-95 transition-all flex items-center gap-2 group"
             >
-              <LogOut size={14} className="group-hover:scale-110 transition-transform" />
+              <LogOut size={14} className="group-hover:rotate-12 transition-transform" />
               Sair
             </button>
           </div>
@@ -767,12 +777,12 @@ export default function App() {
                   setFilterText('');
                 }
               }}
-              className={`p-3 rounded-2xl border transition-all ${isSearchOpen ? 'bg-stone-900 text-white border-stone-900' : 'bg-white border-black/5 text-stone-500 hover:bg-stone-50 shadow-sm'}`}
+              className={`p-3 rounded-2xl border transition-all hover:scale-110 active:scale-95 ${isSearchOpen ? 'bg-stone-900 text-white border-stone-900 shadow-lg' : 'bg-white border-black/5 text-stone-500 hover:bg-stone-50 shadow-sm'}`}
             >
               <Search size={20} />
             </button>
           </div>
-          <button className="p-3 bg-white rounded-2xl border border-black/5 shadow-sm hover:bg-stone-50 transition-colors relative">
+          <button className="p-3 bg-white rounded-2xl border border-black/5 shadow-sm hover:bg-stone-50 hover:scale-110 hover:shadow-md active:scale-95 transition-all relative">
             <Bell size={20} className="text-stone-500" />
             <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
           </button>
@@ -887,7 +897,7 @@ export default function App() {
                   </div>
                 </Card>
 
-                {/* AI Insights */}
+{/* AI Insights - DEATIVADO TEMPORARIAMENTE
                 <Card className="bg-stone-900 text-white border-none overflow-hidden relative">
                   <div className="absolute top-0 right-0 p-4 opacity-10">
                     <Sparkles size={80} />
@@ -914,6 +924,7 @@ export default function App() {
                     </div>
                   </div>
                 </Card>
+                */}
 
                 {/* Category Distribution */}
                 <Card>
@@ -992,9 +1003,9 @@ export default function App() {
                 <h2 className="text-2xl font-semibold tracking-tight">Cartões de Crédito</h2>
                 <button 
                   onClick={() => setShowNewCardForm(true)}
-                  className="bg-stone-900 text-white px-6 py-2 rounded-2xl text-sm font-medium hover:bg-stone-800 transition-colors flex items-center gap-2"
+                  className="bg-stone-900 text-white px-6 py-2 rounded-2xl text-sm font-medium hover:bg-stone-800 transition-all hover:scale-105 hover:shadow-xl hover:shadow-stone-200 active:scale-95 flex items-center gap-2 group"
                 >
-                  <PlusCircle size={18} />
+                  <PlusCircle size={18} className="group-hover:rotate-90 transition-transform" />
                   Novo Cartão
                 </button>
               </div>
@@ -1053,15 +1064,17 @@ export default function App() {
                       <button 
                         type="button" 
                         onClick={() => setShowNewCardForm(false)}
-                        className="flex-1 px-4 py-2 border border-black/5 rounded-xl text-sm font-medium hover:bg-stone-50 transition-colors"
+                        className="flex-1 px-4 py-2 border border-black/5 rounded-xl text-sm font-medium hover:bg-stone-50 hover:shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
                       >
                         Cancelar
                       </button>
                       <button 
                         type="submit" 
-                        className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 transition-colors"
+                        disabled={isSubmitting}
+                        className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 hover:shadow-lg hover:shadow-stone-200 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                       >
-                        Salvar
+                        {isSubmitting && <Loader2 size={16} className="animate-spin" />}
+                        {isSubmitting ? 'Salvando...' : 'Salvar'}
                       </button>
                     </div>
                   </form>
@@ -1142,7 +1155,7 @@ export default function App() {
                     setFilterType(filterType === 'income' ? 'all' : 'income');
                     setFilterStatus('all');
                   }}
-                  className={`p-5 rounded-3xl border transition-all text-left group active:scale-95 ${filterType === 'income' && filterStatus === 'all' ? 'bg-emerald-600 border-emerald-600 shadow-xl shadow-emerald-200' : 'bg-white border-black/5 shadow-sm hover:border-emerald-200'}`}
+                  className={`p-5 rounded-3xl border transition-all text-left group active:scale-95 hover:-translate-y-1 ${filterType === 'income' && filterStatus === 'all' ? 'bg-emerald-600 border-emerald-600 shadow-xl shadow-emerald-200' : 'bg-white border-black/5 shadow-sm hover:border-emerald-200 hover:shadow-md'}`}
                 >
                   <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 transition-colors ${filterType === 'income' && filterStatus === 'all' ? 'text-emerald-100' : 'text-stone-400 group-hover:text-emerald-500'}`}>Receitas</p>
                   <p className={`text-lg font-bold transition-colors ${filterType === 'income' && filterStatus === 'all' ? 'text-white' : 'text-emerald-600'}`}>
@@ -1155,7 +1168,7 @@ export default function App() {
                     setFilterType(filterType === 'expense' && filterStatus === 'all' ? 'all' : 'expense');
                     setFilterStatus('all');
                   }}
-                  className={`p-5 rounded-3xl border transition-all text-left group active:scale-95 ${filterType === 'expense' && filterStatus === 'all' ? 'bg-rose-600 border-rose-600 shadow-xl shadow-rose-200' : 'bg-white border-black/5 shadow-sm hover:border-rose-200'}`}
+                  className={`p-5 rounded-3xl border transition-all text-left group active:scale-95 hover:-translate-y-1 ${filterType === 'expense' && filterStatus === 'all' ? 'bg-rose-600 border-rose-600 shadow-xl shadow-rose-200' : 'bg-white border-black/5 shadow-sm hover:border-rose-200 hover:shadow-md'}`}
                 >
                   <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 transition-colors ${filterType === 'expense' && filterStatus === 'all' ? 'text-rose-100' : 'text-stone-400 group-hover:text-rose-500'}`}>Despesas</p>
                   <p className={`text-lg font-bold transition-colors ${filterType === 'expense' && filterStatus === 'all' ? 'text-white' : 'text-rose-600'}`}>
@@ -1163,7 +1176,7 @@ export default function App() {
                   </p>
                 </button>
 
-                <div className="bg-white p-5 rounded-3xl border border-black/5 shadow-sm">
+                <div className="bg-white p-5 rounded-3xl border border-black/5 shadow-sm hover:shadow-md transition-all">
                   <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-1">Saldo</p>
                   <p className={`text-lg font-bold ${currentBalance >= 0 ? 'text-stone-900' : 'text-rose-600'}`}>
                     {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(currentBalance)}
@@ -1175,7 +1188,7 @@ export default function App() {
                     setFilterStatus(filterStatus === 'overdue' ? 'all' : 'overdue');
                     if (filterStatus !== 'overdue') setFilterType('all');
                   }}
-                  className={`p-5 rounded-3xl border transition-all text-left relative overflow-hidden group active:scale-95 ${filterStatus === 'overdue' ? 'bg-rose-600 border-rose-600 shadow-xl shadow-rose-200' : 'bg-rose-50 border-rose-100 shadow-sm hover:border-rose-200'}`}
+                  className={`p-5 rounded-3xl border transition-all text-left relative overflow-hidden group active:scale-95 hover:-translate-y-1 ${filterStatus === 'overdue' ? 'bg-rose-600 border-rose-600 shadow-xl shadow-rose-200' : 'bg-rose-50 border-rose-100 shadow-sm hover:border-rose-200 hover:shadow-md'}`}
                 >
                   <div className={`absolute -right-2 -bottom-2 transition-all ${filterStatus === 'overdue' ? 'text-rose-500 scale-110' : 'text-rose-100 group-hover:scale-110'}`}>
                     <AlertCircle size={48} />
@@ -1189,7 +1202,7 @@ export default function App() {
                     setFilterStatus(filterStatus === 'due-soon' ? 'all' : 'due-soon');
                     if (filterStatus !== 'due-soon') setFilterType('all');
                   }}
-                  className={`p-5 rounded-3xl border transition-all text-left relative overflow-hidden group active:scale-95 ${filterStatus === 'due-soon' ? 'bg-amber-500 border-amber-500 shadow-xl shadow-amber-100' : 'bg-amber-50 border-amber-100 shadow-sm hover:border-amber-200'}`}
+                  className={`p-5 rounded-3xl border transition-all text-left relative overflow-hidden group active:scale-95 hover:-translate-y-1 ${filterStatus === 'due-soon' ? 'bg-amber-500 border-amber-500 shadow-xl shadow-amber-100' : 'bg-amber-50 border-amber-100 shadow-sm hover:border-amber-200 hover:shadow-md'}`}
                 >
                   <div className={`absolute -right-2 -bottom-2 transition-all ${filterStatus === 'due-soon' ? 'text-amber-400 scale-110' : 'text-amber-100 group-hover:scale-110'}`}>
                     <Clock size={48} />
@@ -1440,9 +1453,11 @@ export default function App() {
 
                         <button 
                           type="submit" 
-                          className="w-full py-3 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 transition-colors mt-2"
+                          disabled={isSubmitting}
+                          className="w-full py-3 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 hover:shadow-xl hover:shadow-stone-200 hover:scale-[1.02] active:scale-95 transition-all mt-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                         >
-                          {editingTransaction ? 'Atualizar' : 'Confirmar Lançamento'}
+                          {isSubmitting && <Loader2 size={18} className="animate-spin" />}
+                          {isSubmitting ? 'Processando...' : (editingTransaction ? 'Atualizar' : 'Confirmar Lançamento')}
                         </button>
                       </form>
                     </Card>
@@ -1456,7 +1471,7 @@ export default function App() {
                       <div className="flex items-center">
                         <button 
                           onClick={handlePrevMonth}
-                          className="p-2 hover:bg-stone-50 rounded-xl text-stone-400 hover:text-stone-900 transition-all group"
+                          className="p-2 hover:bg-white hover:shadow-md rounded-xl text-stone-400 hover:text-stone-900 transition-all hover:scale-110 active:scale-90 group"
                         >
                           <ChevronLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
                         </button>
@@ -1512,7 +1527,7 @@ export default function App() {
 
                         <button 
                           onClick={handleNextMonth}
-                          className="p-2 hover:bg-stone-50 rounded-xl text-stone-400 hover:text-stone-900 transition-all group"
+                          className="p-2 hover:bg-white hover:shadow-md rounded-xl text-stone-400 hover:text-stone-900 transition-all hover:scale-110 active:scale-90 group"
                         >
                           <ChevronRight size={14} className="group-hover:translate-x-0.5 transition-transform" />
                         </button>
@@ -1528,7 +1543,7 @@ export default function App() {
                               setFilterType(type);
                               setFilterStatus('all');
                             }}
-                            className={`px-4 py-1.5 rounded-lg text-[8px] font-bold uppercase tracking-widest transition-all ${filterType === type ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600'}`}
+                            className={`px-4 py-1.5 rounded-lg text-[8px] font-bold uppercase tracking-widest transition-all hover:scale-105 active:scale-95 ${filterType === type ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-white hover:shadow-sm'}`}
                           >
                             {type === 'all' ? 'Tudo' : type === 'income' ? 'Receitas' : 'Despesas'}
                           </button>
@@ -1538,9 +1553,9 @@ export default function App() {
 
                     <button 
                       onClick={() => setShowFilterRow(!showFilterRow)}
-                      className={`p-3 rounded-2xl border transition-all flex items-center gap-2 group ${showFilterRow ? 'bg-stone-900 border-stone-900 text-white shadow-lg' : 'bg-white border-stone-100 text-stone-400 hover:text-stone-900 hover:border-stone-200 shadow-sm'}`}
+                      className={`p-3 rounded-2xl border transition-all flex items-center gap-2 group hover:scale-105 active:scale-95 ${showFilterRow ? 'bg-stone-900 border-stone-900 text-white shadow-lg shadow-stone-200' : 'bg-white border-stone-100 text-stone-400 hover:text-stone-900 hover:border-stone-200 shadow-sm hover:shadow-md'}`}
                     >
-                      <Filter size={16} className={showFilterRow ? 'animate-pulse' : ''} />
+                      <Filter size={16} className={`${showFilterRow ? 'animate-pulse' : 'group-hover:rotate-12 transition-transform'}`} />
                       <span className="text-[10px] font-bold uppercase tracking-widest hidden md:block">Filtros</span>
                     </button>
                   </div>
@@ -1556,9 +1571,9 @@ export default function App() {
                     )}
                     <button 
                       onClick={() => setShowNewTransactionForm(true)}
-                      className="bg-stone-900 text-white px-6 py-2 rounded-2xl text-[10px] font-bold uppercase tracking-widest hover:bg-stone-800 transition-all hover:scale-105 active:scale-95 shadow-xl shadow-stone-200 flex items-center gap-2"
+                      className="bg-stone-900 text-white px-6 py-2 rounded-2xl text-[10px] font-bold uppercase tracking-widest hover:bg-stone-800 transition-all hover:scale-105 hover:shadow-2xl hover:shadow-stone-300 active:scale-95 shadow-xl shadow-stone-200 flex items-center gap-2 group"
                     >
-                      <Plus size={14} className="text-emerald-400" />
+                      <Plus size={14} className="text-emerald-400 group-hover:rotate-90 transition-transform" />
                       Novo Lançamento
                     </button>
                   </div>
@@ -1735,18 +1750,18 @@ export default function App() {
                                   {t.type === 'income' ? '+' : '-'} {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.amount)}
                                 </td>
                                 <td className="py-4 text-right">
-                                  <div className="flex justify-end gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                                  <div className="flex justify-end gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-all duration-300">
                                     <button 
                                       onClick={() => handleToggleSettle(t)} 
-                                      className={`p-2 rounded-lg transition-colors ${t.settled ? 'bg-emerald-100 text-emerald-600' : 'hover:bg-stone-200 text-stone-400 hover:text-stone-600'}`}
+                                      className={`p-2 rounded-lg transition-all hover:scale-110 active:scale-90 ${t.settled ? 'bg-emerald-100 text-emerald-600 shadow-sm' : 'hover:bg-stone-200 text-stone-400 hover:text-stone-600 hover:shadow-md'}`}
                                       title={t.settled ? "Extornar quitação" : "Quitar lançamento"}
                                     >
                                       <CheckCircle2 size={14} />
                                     </button>
                                     {!t.settled && (
                                       <>
-                                        <button onClick={() => handleEditClick(t)} className="p-2 hover:bg-stone-200 rounded-lg text-stone-500 transition-colors"><Edit2 size={14} /></button>
-                                        <button onClick={() => confirmDelete(t)} className="p-2 hover:bg-rose-100 rounded-lg text-rose-500 transition-colors"><Trash2 size={14} /></button>
+                                        <button onClick={() => handleEditClick(t)} className="p-2 hover:bg-stone-200 hover:scale-110 active:scale-90 hover:shadow-md rounded-lg text-stone-500 transition-all"><Edit2 size={14} /></button>
+                                        <button onClick={() => confirmDelete(t)} className="p-2 hover:bg-rose-100 hover:scale-110 active:scale-90 hover:shadow-md rounded-lg text-rose-500 transition-all"><Trash2 size={14} /></button>
                                       </>
                                     )}
                                   </div>

@@ -2,18 +2,18 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = parseInt(process.env.PORT || "3000", 10);
 
   app.use(cors());
   app.use(express.json());
 
   // API Key for Gemini
   const apiKey = process.env.GEMINI_API_KEY || "";
-  const genAI = new GoogleGenAI(apiKey);
+  const genAI = new GoogleGenerativeAI(apiKey);
 
   // AI Proxy Routes
   app.post("/api/ai/command", async (req, res) => {
@@ -50,30 +50,8 @@ async function startServer() {
   });
 
   app.post("/api/ai/insights", async (req, res) => {
-    const { data } = req.body;
-    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
-
-    try {
-      const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
-      const prompt = `
-        Com base nos seguintes dados financeiros:
-        ${JSON.stringify(data)}
-
-        Gere 3 insights curtos, acionáveis e amigáveis para o usuário.
-        Foque em economia, alertas de orçamento e progresso de metas.
-        Retorne em formato de lista JSON: { "insights": [ { "title": "", "text": "", "type": "warning|success|info" } ] }
-      `;
-
-      const result = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
-      });
-      const response = await result.response;
-      res.json(JSON.parse(response.text()));
-    } catch (e: any) {
-      console.error("AI Insights Proxy Error:", e);
-      res.status(500).json({ error: "Failed to generate insights" });
-    }
+    // Desativado temporariamente conforme pedido do usuário
+    res.json({ insights: [] });
   });
 
   app.get("/api/health", (req, res) => res.json({ status: "ok" }));
