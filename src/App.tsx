@@ -32,8 +32,11 @@ import {
   Filter,
   ChevronDown,
   LogOut,
-  Loader2
+  Loader2,
+  Download,
+  FileDown
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AreaChart, 
@@ -272,6 +275,16 @@ export default function App() {
     return 'normal';
   };
 
+  const calculateRealizedAmount = (t: Transaction) => {
+    if (t.payments && t.payments.length > 0) {
+      return t.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    }
+    if (t.settled) {
+      return Number(t.realizedAmount ?? t.amount) || 0;
+    }
+    return 0;
+  };
+
   const filteredTransactions = transactions
     .filter(t => {
       const d = new Date(t.date);
@@ -339,14 +352,8 @@ export default function App() {
   const metrics = React.useMemo(() => {
     return filteredTransactions.reduce((acc, t) => {
       const status = getTransactionStatus(t);
-      const amount = t.amount;
-      
-      let realizedAmount = 0;
-      if (t.payments && t.payments.length > 0) {
-        realizedAmount = t.payments.reduce((sum, p) => sum + p.amount, 0);
-      } else if (t.settled) {
-        realizedAmount = t.realizedAmount !== undefined ? t.realizedAmount : t.amount;
-      }
+      const amount = Number(t.amount) || 0;
+      const realizedAmount = calculateRealizedAmount(t);
 
       if (t.type === 'income') {
         acc.income += amount;
@@ -379,12 +386,12 @@ export default function App() {
       ]);
       
       // Calculate summary on frontend as we've moved to direct Firebase integration
-      const totalIncome = (transactionsData as any[]).filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
-      const totalExpense = (transactionsData as any[]).filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
+      const totalIncome = (transactionsData as any[]).filter(t => t.type === 'income').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+      const totalExpense = (transactionsData as any[]).filter(t => t.type === 'expense').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
       const balance = totalIncome - totalExpense;
 
-      const totalRealizedIncome = (transactionsData as any[]).filter(t => t.type === 'income' && t.settled).reduce((acc, t) => acc + (t.realizedAmount !== undefined ? t.realizedAmount : t.amount), 0);
-      const totalRealizedExpense = (transactionsData as any[]).filter(t => t.type === 'expense' && t.settled).reduce((acc, t) => acc + (t.realizedAmount !== undefined ? t.realizedAmount : t.amount), 0);
+      const totalRealizedIncome = (transactionsData as any[]).filter(t => t.type === 'income').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
+      const totalRealizedExpense = (transactionsData as any[]).filter(t => t.type === 'expense').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
       const realizedBalance = totalRealizedIncome - totalRealizedExpense;
 
       const summaryData: Summary = {
@@ -783,6 +790,46 @@ export default function App() {
     } finally {
       setIsSubmittingSettle(false);
     }
+  };
+
+  const handleExportExcel = () => {
+    // Sheet 1: Data
+    const dataToExport = filteredTransactions.map(t => ({
+      'Data': new Date(t.date).toLocaleDateString('pt-BR'),
+      'Descrição': t.description,
+      'Categoria': t.category,
+      'Conta/Cartão': t.account,
+      'Tipo': t.type === 'income' ? 'Receita' : 'Despesa',
+      'Valor Planejado': t.amount,
+      'Valor Pago': calculateRealizedAmount(t),
+      'Status': t.settled ? 'Quitado' : (getTransactionStatus(t) === 'overdue' ? 'Vencido' : (getTransactionStatus(t) === 'due-soon' ? 'A Vencer' : 'Pendente')),
+      'Recorrente': t.isRecurringEntry ? 'Sim' : 'Não'
+    }));
+
+    // Sheet 2: Applied Filters info
+    const months = [
+      "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+      "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+    ];
+    const filtersInfo = [
+      { 'Filtro': 'Mês Referência', 'Valor': months[selectedMonth] },
+      { 'Filtro': 'Ano Referência', 'Valor': selectedYear },
+      { 'Filtro': 'Busca', 'Valor': filterText || 'Nenhum' },
+      { 'Filtro': 'Categoria', 'Valor': filterCategory === 'all' ? 'Todas' : filterCategory },
+      { 'Filtro': 'Conta/Cartão', 'Valor': filterAccount === 'all' ? 'Todas' : filterAccount },
+      { 'Filtro': 'Tipo', 'Valor': filterType === 'all' ? 'Todos' : (filterType === 'income' ? 'Receitas' : 'Despesas') },
+      { 'Filtro': 'Status', 'Valor': filterStatus === 'all' ? 'Todos' : (filterStatus === 'paid' ? 'Quitados' : 'Pendentes') }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    
+    const wsData = XLSX.utils.json_to_sheet(dataToExport);
+    XLSX.utils.book_append_sheet(wb, wsData, "relatório");
+    
+    const wsFilters = XLSX.utils.json_to_sheet(filtersInfo);
+    XLSX.utils.book_append_sheet(wb, wsFilters, "filtros aplicados");
+    
+    XLSX.writeFile(wb, "financeiro.xlsx");
   };
 
   const handleToggleSettle = async (t: Transaction, e: React.MouseEvent) => {
@@ -1967,6 +2014,15 @@ export default function App() {
                       <Filter size={16} className={`${showFilterRow ? 'animate-pulse' : 'group-hover:rotate-12 transition-transform'}`} />
                       <span className="text-[10px] font-bold uppercase tracking-widest hidden md:block">Filtros</span>
                     </button>
+
+                    <button 
+                      onClick={handleExportExcel}
+                      className="p-3 rounded-2xl border border-stone-100 bg-white text-stone-400 hover:text-stone-900 hover:border-stone-200 shadow-sm hover:shadow-md hover:scale-105 active:scale-95 transition-all flex items-center gap-2 group"
+                      title="Exportar para Excel"
+                    >
+                      <FileDown size={16} className="group-hover:translate-y-0.5 transition-transform" />
+                      <span className="text-[10px] font-bold uppercase tracking-widest hidden md:block">Exportar</span>
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-3">
@@ -2161,11 +2217,7 @@ export default function App() {
                                    <div className="flex flex-col items-end">
                                      <span>{t.type === 'income' ? '+' : '-'} {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.amount)}</span>
                                      <span className="text-[10px] font-medium text-stone-400">
-                                       {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
-                                         t.payments && t.payments.length > 0 
-                                           ? t.payments.reduce((sum, p) => sum + p.amount, 0)
-                                           : (t.realizedAmount !== undefined ? t.realizedAmount : 0)
-                                       )}
+                                       {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(calculateRealizedAmount(t))}
                                      </span>
                                    </div>
                                  </td>
