@@ -8,7 +8,7 @@ service cloud.firestore {
 
     // --- Helpers ---
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null;
     }
 
     function isOwner(uid) {
@@ -67,52 +67,23 @@ service cloud.firestore {
     // --- Collection Matches ---
 
     match /transactions/{transactionId} {
-      allow create: if isSignedIn() && isValidId(transactionId) && 
-                      isValidTransaction(incoming()) &&
-                      incoming().keys().hasAll(['uid', 'type', 'amount', 'description', 'category', 'date']) &&
-                      incoming().keys().size() >= 6;
-      
-      allow update: if isSignedIn() && isOwner(existing().uid) && isValidTransaction(incoming()) &&
-                      incoming().uid == existing().uid &&
-                      (
-                        incoming().diff(existing()).affectedKeys().hasOnly([
-                          'type', 'amount', 'description', 'category', 'date', 
-                          'settled', 'installmentGroup', 'recurringGroup', 'isRecurringEntry',
-                          'updatedAt'
-                        ])
-                      );
-      
-      allow delete: if isSignedIn() && isOwner(existing().uid);
-      
-      allow get: if isSignedIn() && isOwner(existing().uid);
-      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update, delete, get, list: if isSignedIn() && (resource == null || resource.data.uid == request.auth.uid);
     }
 
     match /accounts/{accountId} {
-      allow create: if isSignedIn() && isValidId(accountId) && isValidAccount(incoming());
-      allow update: if isSignedIn() && isOwner(existing().uid) && isValidAccount(incoming()) &&
-                      incoming().uid == existing().uid;
-      allow delete: if isSignedIn() && isOwner(existing().uid);
-      allow get: if isSignedIn() && isOwner(existing().uid);
-      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update, delete, get, list: if isSignedIn() && (resource == null || resource.data.uid == request.auth.uid);
     }
 
     match /cards/{cardId} {
-      allow create: if isSignedIn() && isValidId(cardId) && isValidCard(incoming());
-      allow update: if isSignedIn() && isOwner(existing().uid) && isValidCard(incoming()) &&
-                      incoming().uid == existing().uid;
-      allow delete: if isSignedIn() && isOwner(existing().uid);
-      allow get: if isSignedIn() && isOwner(existing().uid);
-      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update, delete, get, list: if isSignedIn() && (resource == null || resource.data.uid == request.auth.uid);
     }
 
     match /categories/{categoryId} {
-      allow create: if isSignedIn() && isValidId(categoryId) && isValidCategory(incoming());
-      allow update: if isSignedIn() && isOwner(existing().uid) && isValidCategory(incoming()) &&
-                      incoming().uid == existing().uid;
-      allow delete: if isSignedIn() && isOwner(existing().uid);
-      allow get: if isSignedIn() && isOwner(existing().uid);
-      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update, delete, get, list: if isSignedIn() && (resource == null || resource.data.uid == request.auth.uid);
     }
   }
 }

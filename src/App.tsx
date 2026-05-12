@@ -152,6 +152,8 @@ export default function App() {
   const [newCategoryNameInModal, setNewCategoryNameInModal] = useState('');
   const [addingCategoryType, setAddingCategoryType] = useState<'income' | 'expense' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [manualCategoryName, setManualCategoryName] = useState('');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
@@ -413,8 +415,12 @@ export default function App() {
       setNewCardClosing('');
       setNewCardDue('');
       fetchData();
-    } catch (e) {
+      setSuccessMessage("Cartão adicionado com sucesso!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (e: any) {
       console.error(e);
+      setErrorMessage("Erro ao criar cartão. Verifique sua conexão.");
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setIsSubmitting(false);
     }
@@ -446,8 +452,19 @@ export default function App() {
       }
       resetTransForm();
       fetchData();
-    } catch (e) {
+      setSuccessMessage(editingTransaction ? "Lançamento atualizado!" : "Lançamento confirmado!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (e: any) {
       console.error(e);
+      let msg = "Erro ao salvar lançamento. Verifique sua conexão.";
+      try {
+        const errObj = JSON.parse(e.message);
+        if (errObj.error.includes('permission-denied')) {
+          msg = "Sem permissão para salvar. Verifique se seu e-mail está verificado ou se os dados estão corretos.";
+        }
+      } catch {}
+      setErrorMessage(msg);
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setIsSubmitting(false);
     }
@@ -1227,6 +1244,28 @@ export default function App() {
                         </button>
                       </div>
                       <form onSubmit={handleCreateTransaction} className="space-y-4">
+                        <AnimatePresence>
+                          {errorMessage && (
+                            <motion.div 
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="p-3 bg-rose-50 border border-rose-100 rounded-xl text-rose-600 text-xs font-medium"
+                            >
+                              {errorMessage}
+                            </motion.div>
+                          )}
+                          {successMessage && (
+                            <motion.div 
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-600 text-xs font-medium"
+                            >
+                              {successMessage}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                         <div className="flex p-1 bg-stone-100 rounded-xl">
                           <button 
                             type="button" 
