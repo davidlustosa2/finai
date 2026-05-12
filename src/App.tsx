@@ -51,12 +51,14 @@ import { AIService } from './services/aiService';
 
 // --- Types ---
 interface Transaction {
-  id: number;
+  id: string | number;
   type: 'income' | 'expense' | 'transfer';
   amount: number;
   description: string;
   category: string;
   date: string;
+  realizedAmount?: number;
+  realizedDate?: string;
   account: string;
   isRecurringEntry?: boolean;
   recurringGroup?: number;
@@ -141,6 +143,9 @@ export default function App() {
   const [transCategory, setTransCategory] = useState('');
   const [transAccount, setTransAccount] = useState('Conta Corrente');
   const [transDate, setTransDate] = useState(new Date().toISOString().split('T')[0]);
+  const [transRealizedAmount, setTransRealizedAmount] = useState('');
+  const [transRealizedDate, setTransRealizedDate] = useState('');
+  const [showRealizedFields, setShowRealizedFields] = useState(false);
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurrenceMode, setRecurrenceMode] = useState<'continuous' | 'installments'>('continuous');
   const [transFrequency, setTransFrequency] = useState<'monthly' | 'weekly'>('monthly');
@@ -154,6 +159,14 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Settle States
+  const [settlingTransaction, setSettlingTransaction] = useState<Transaction | null>(null);
+  const [settleAmount, setSettleAmount] = useState('');
+  const [settleDate, setSettleDate] = useState('');
+  const [isSubmittingSettle, setIsSubmittingSettle] = useState(false);
+  const [showSettleModal, setShowSettleModal] = useState(false);
+  const [settleCoords, setSettleCoords] = useState({ top: 0, left: 0 });
   const [manualCategoryName, setManualCategoryName] = useState('');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
@@ -442,6 +455,8 @@ export default function App() {
       category: transCategory || 'Outros',
       account: transAccount || 'Conta Corrente',
       date: new Date(transDate + 'T12:00:00').toISOString(), // Use midday to avoid timezone shifts
+      realizedAmount: showRealizedFields ? parseCurrency(transRealizedAmount) : undefined,
+      realizedDate: showRealizedFields && transRealizedDate ? new Date(transRealizedDate + 'T12:00:00').toISOString() : undefined,
       isRecurring: isRecurring && recurrenceMode === 'continuous',
       frequency: isRecurring && recurrenceMode === 'continuous' ? transFrequency : undefined,
       installments: isRecurring && recurrenceMode === 'installments' ? parseInt(installmentsCount) : undefined
@@ -525,6 +540,13 @@ export default function App() {
     setTransCategory(t.category);
     setTransAccount(t.account);
     setTransDate(new Date(t.date).toISOString().split('T')[0]);
+    if (t.realizedAmount !== undefined || t.realizedDate) {
+      setTransRealizedAmount(t.realizedAmount !== undefined ? maskCurrency((t.realizedAmount * 100).toFixed(0)) : '');
+      setTransRealizedDate(t.realizedDate ? new Date(t.realizedDate).toISOString().split('T')[0] : '');
+      setShowRealizedFields(true);
+    } else {
+      setShowRealizedFields(false);
+    }
     setIsRecurring(!!(t.recurringGroup || t.installmentGroup));
     if (t.installmentGroup) {
       setRecurrenceMode('installments');
@@ -543,6 +565,9 @@ export default function App() {
     setTransCategory('');
     setTransAccount('Conta Corrente');
     setTransDate(new Date().toISOString().split('T')[0]);
+    setTransRealizedAmount('');
+    setTransRealizedDate('');
+    setShowRealizedFields(false);
     setIsRecurring(false);
     setRecurrenceMode('continuous');
     setTransFrequency('monthly');
@@ -602,12 +627,56 @@ export default function App() {
     }
   };
   
-  const handleToggleSettle = async (t: Transaction) => {
+  const handleToggleSettle = async (t: Transaction, e: React.MouseEvent) => {
+    if (t.settled) {
+      // Extornar quitação (just unset settled and realized fields)
+      try {
+        await firestoreService.updateTransaction(t.id.toString(), { 
+          settled: false,
+          realizedAmount: null, // Firestore update with null can be tricky, but let's assume we want to clear it
+          realizedDate: null 
+        });
+        fetchData();
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      // Open settle modal
+      setSettlingTransaction(t);
+      setSettleAmount(maskCurrency((t.amount * 100).toFixed(0)));
+      setSettleDate(new Date(t.date).toISOString().split('T')[0]);
+      
+      // Calculate position relative to viewport for fixed positioning
+      const rect = e.currentTarget.getBoundingClientRect();
+      setSettleCoords({ 
+        top: rect.top, 
+        left: rect.left 
+      });
+      
+      setShowSettleModal(true);
+    }
+  };
+
+  const handleConfirmSettle = async () => {
+    if (!settlingTransaction) return;
+    setIsSubmittingSettle(true);
     try {
-      await firestoreService.updateTransaction(t.id.toString(), { settled: !t.settled });
+      await firestoreService.updateTransaction(settlingTransaction.id.toString(), {
+        settled: true,
+        realizedAmount: parseCurrency(settleAmount),
+        realizedDate: new Date(settleDate + 'T12:00:00').toISOString()
+      });
+      setShowSettleModal(false);
+      setSettlingTransaction(null);
       fetchData();
-    } catch (e) {
+      setSuccessMessage("Lançamento quitado com sucesso!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (e: any) {
       console.error(e);
+      setErrorMessage("Erro ao quitar lançamento.");
+      setTimeout(() => setErrorMessage(null), 5000);
+    } finally {
+      setIsSubmittingSettle(false);
     }
   };
 
@@ -884,9 +953,14 @@ export default function App() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <p className={`font-semibold ${t.settled ? 'text-stone-400' : (t.type === 'income' ? 'text-emerald-600' : 'text-rose-600')}`}>
-                            {t.type === 'income' ? '+' : '-'} {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.amount)}
-                          </p>
+                          <div className={`font-semibold ${t.settled ? 'text-stone-400' : (t.type === 'income' ? 'text-emerald-600' : 'text-rose-600')} flex flex-col items-end`}>
+                            <span>{t.type === 'income' ? '+' : '-'} {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.amount)}</span>
+                            {t.realizedAmount !== undefined && (
+                              <span className="text-[10px] text-emerald-500">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.realizedAmount)}
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-stone-400">{new Date(t.date).toLocaleDateString('pt-BR')}</p>
                         </div>
                       </div>
@@ -1311,7 +1385,7 @@ export default function App() {
                         </div>
                         <div className="grid grid-cols-2 gap-8">
                           <div>
-                            <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Valor</label>
+                            <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Valor (Planejado)</label>
                             <input 
                               type="text" 
                               value={transAmount}
@@ -1323,7 +1397,7 @@ export default function App() {
                             <div className="h-px bg-stone-100 w-full" />
                           </div>
                           <div>
-                            <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Data</label>
+                            <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Data (Prevista)</label>
                             <input 
                               type="date" 
                               value={transDate}
@@ -1424,7 +1498,16 @@ export default function App() {
                           <div className="h-px bg-stone-100 w-full" />
                         </div>
 
-                        <div className="pt-2">
+                        <div className="pt-2 flex flex-wrap gap-2">
+                          <button 
+                            type="button" 
+                            onClick={() => setShowRealizedFields(!showRealizedFields)}
+                            className={`flex items-center gap-2 text-[10px] font-medium px-3 py-1.5 rounded-full border transition-all ${showRealizedFields ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-transparent border-stone-200 text-stone-400 hover:text-stone-600'}`}
+                          >
+                            <CheckCircle2 size={12} />
+                            {showRealizedFields ? 'Quitar Lançamento' : 'Quitar Lançamento'}
+                          </button>
+                          
                           <button 
                             type="button" 
                             onClick={() => setIsRecurring(!isRecurring)}
@@ -1433,15 +1516,49 @@ export default function App() {
                             <Repeat size={12} />
                             {isRecurring ? 'Lançamento Recorrente' : 'Marcar como Recorrente'}
                           </button>
+                        </div>
 
-                          <AnimatePresence>
-                            {isRecurring && (
-                              <motion.div 
-                                initial={{ opacity: 0, height: 0, marginTop: 0 }}
-                                animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
-                                exit={{ opacity: 0, height: 0, marginTop: 0 }}
-                                className="overflow-hidden space-y-4 pt-2 border-t border-stone-50"
-                              >
+                        <AnimatePresence>
+                          {showRealizedFields && (
+                            <motion.div 
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="overflow-hidden space-y-4 pt-4 border-t border-emerald-100 bg-emerald-50/30 p-4 rounded-3xl"
+                            >
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <label className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block mb-1">Valor de Quitação</label>
+                                  <input 
+                                    type="text" 
+                                    value={transRealizedAmount}
+                                    onChange={(e) => setTransRealizedAmount(maskCurrency(e.target.value))}
+                                    placeholder="0,00"
+                                    className="w-full bg-white border border-emerald-100 rounded-2xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-sm font-medium text-emerald-700"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block mb-1">Data Quitação</label>
+                                  <input 
+                                    type="date" 
+                                    value={transRealizedDate}
+                                    onChange={(e) => setTransRealizedDate(e.target.value)}
+                                    className="w-full bg-white border border-emerald-100 rounded-2xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-sm font-medium text-emerald-700"
+                                  />
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
+                        <AnimatePresence>
+                          {isRecurring && (
+                            <motion.div 
+                              initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                              animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
+                              exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                              className="overflow-hidden space-y-4 pt-4 border-t border-stone-50"
+                            >
                                 <div className="flex gap-4">
                                   <label className="flex items-center gap-2 cursor-pointer">
                                     <input 
@@ -1497,7 +1614,6 @@ export default function App() {
                               </motion.div>
                             )}
                           </AnimatePresence>
-                        </div>
 
                         <button 
                           type="submit" 
@@ -1784,33 +1900,46 @@ export default function App() {
                                     </div>
                                     <div className="flex flex-col">
                                       <span className={`font-medium text-sm ${t.settled ? 'line-through text-stone-400' : ''}`}>{t.description}</span>
-                                      {(t.isRecurringEntry || t.installmentGroup) && (
-                                        <span className="text-[9px] text-stone-400 flex items-center gap-1 uppercase tracking-wider">
-                                          <Repeat size={10} />
-                                          {t.isRecurringEntry ? 'Recorrente' : 'Parcelado'}
-                                        </span>
-                                      )}
+                                      <div className="flex flex-wrap gap-2 items-center">
+                                        {(t.isRecurringEntry || t.installmentGroup) && (
+                                          <span className="text-[9px] text-stone-400 flex items-center gap-1 uppercase tracking-wider">
+                                            <Repeat size={10} />
+                                            {t.isRecurringEntry ? 'Recorrente' : 'Parcelado'}
+                                          </span>
+                                        )}
+                                        {t.realizedDate && (
+                                          <span className="text-[9px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded flex items-center gap-1 uppercase tracking-wider">
+                                            <CheckCircle2 size={10} />
+                                            Realizado em {new Date(t.realizedDate).toLocaleDateString('pt-BR')}
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                 </td>
                                 <td className="py-4"><span className="text-xs bg-stone-100 px-2 py-1 rounded-md text-stone-600">{t.category}</span></td>
                                 <td className={`py-4 text-sm font-semibold text-right ${t.settled ? 'text-stone-400' : (t.type === 'income' ? 'text-emerald-600' : 'text-rose-600')}`}>
-                                  {t.type === 'income' ? '+' : '-'} {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.amount)}
-                                </td>
-                                <td className="py-4 text-right">
-                                  <div className="flex justify-end gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-all duration-300">
+                                   <div className="flex flex-col items-end">
+                                     <span>{t.type === 'income' ? '+' : '-'} {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.amount)}</span>
+                                     {t.realizedAmount !== undefined && (
+                                       <span className="text-[10px] font-medium text-emerald-500">
+                                         {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.realizedAmount)}
+                                       </span>
+                                     )}
+                                   </div>
+                                 </td>
+                                 <td className="py-4 text-right">
+                                   <div className="flex justify-end gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-all duration-300 relative">
                                     <button 
-                                      onClick={() => handleToggleSettle(t)} 
+                                      onClick={(e) => handleToggleSettle(t, e)} 
                                       className={`p-2 rounded-lg transition-all hover:scale-110 active:scale-90 ${t.settled ? 'bg-emerald-100 text-emerald-600 shadow-sm' : 'hover:bg-stone-200 text-stone-400 hover:text-stone-600 hover:shadow-md'}`}
                                       title={t.settled ? "Extornar quitação" : "Quitar lançamento"}
                                     >
-                                      <CheckCircle2 size={14} />
+                                      <CheckCircle2 size={16} />
                                     </button>
+                                    <button onClick={() => handleEditClick(t)} className="p-2 hover:bg-stone-200 hover:scale-110 active:scale-90 hover:shadow-md rounded-lg text-stone-500 transition-all" title="Visualizar / Editar"><Edit2 size={14} /></button>
                                     {!t.settled && (
-                                      <>
-                                        <button onClick={() => handleEditClick(t)} className="p-2 hover:bg-stone-200 hover:scale-110 active:scale-90 hover:shadow-md rounded-lg text-stone-500 transition-all"><Edit2 size={14} /></button>
-                                        <button onClick={() => confirmDelete(t)} className="p-2 hover:bg-rose-100 hover:scale-110 active:scale-90 hover:shadow-md rounded-lg text-rose-500 transition-all"><Trash2 size={14} /></button>
-                                      </>
+                                      <button onClick={() => confirmDelete(t)} className="p-2 hover:bg-rose-100 hover:scale-110 active:scale-90 hover:shadow-md rounded-lg text-rose-500 transition-all"><Trash2 size={14} /></button>
                                     )}
                                   </div>
                                 </td>
@@ -2105,6 +2234,77 @@ export default function App() {
                 </div>
               </motion.div>
             </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showSettleModal && settlingTransaction && (
+            <div className="fixed inset-0 z-[1000] pointer-events-auto">
+              {/* Overlay to detect outside clicks */}
+              <div className="absolute inset-0 bg-black/5" onClick={() => setShowSettleModal(false)} />
+              
+              <motion.div 
+                initial={{ opacity: 0, x: 20, scale: 0.9 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 20, scale: 0.9 }}
+                style={{ 
+                  position: 'fixed', 
+                  top: settleCoords.top - 80, // Offset to align vertically
+                  left: settleCoords.left - 290, // Left of the button
+                }}
+                className="w-[280px] bg-white border border-black/5 shadow-2xl rounded-3xl p-5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Arrow pointing to button */}
+                <div className="absolute right-[-6px] top-[90px] w-3 h-3 bg-white border-r border-t border-black/10 rotate-45" />
+                
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-8 h-8 bg-emerald-50 text-emerald-500 rounded-xl flex items-center justify-center">
+                      <CheckCircle2 size={16} />
+                    </div>
+                    <h4 className="text-xs font-bold text-stone-900 uppercase tracking-wider">Quitar Lançamento</h4>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[8px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Valor de Quitação</label>
+                      <input 
+                        type="text" 
+                        value={settleAmount}
+                        onChange={(e) => setSettleAmount(maskCurrency(e.target.value))}
+                        className="w-full bg-stone-50 border border-stone-100 rounded-xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-xs font-bold text-stone-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[8px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Data Quitação</label>
+                      <input 
+                        type="date" 
+                        value={settleDate}
+                        onChange={(e) => setSettleDate(e.target.value)}
+                        className="w-full bg-stone-50 border border-stone-100 rounded-xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-xs font-bold text-stone-900"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button 
+                      onClick={() => setShowSettleModal(false)}
+                      className="flex-1 py-2 text-stone-400 hover:text-stone-600 text-[10px] font-bold uppercase tracking-widest"
+                    >
+                      Cancelar
+                    </button>
+                    <button 
+                      onClick={handleConfirmSettle}
+                      disabled={isSubmittingSettle}
+                      className="flex-1 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 disabled:opacity-50"
+                    >
+                      {isSubmittingSettle ? '...' : 'Confirmar'}
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
           )}
         </AnimatePresence>
 
