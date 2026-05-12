@@ -61,6 +61,16 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
+function cleanData(data: any) {
+  const cleaned: any = {};
+  Object.keys(data).forEach(key => {
+    if (data[key] !== undefined) {
+      cleaned[key] = data[key];
+    }
+  });
+  return cleaned;
+}
+
 export const firestoreService = {
   async getTransactions() {
     const uid = auth.currentUser?.uid;
@@ -81,12 +91,12 @@ export const firestoreService = {
     if (!uid) throw new Error('Not authenticated');
     const path = 'transactions';
     try {
-      const docRef = await addDoc(collection(db, path), {
+      const docRef = await addDoc(collection(db, path), cleanData({
         ...data,
         uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
-      });
+      }));
       return { id: docRef.id, ...data };
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
@@ -97,10 +107,10 @@ export const firestoreService = {
     const path = `transactions/${id}`;
     try {
       const docRef = doc(db, 'transactions', id);
-      await updateDoc(docRef, {
+      await updateDoc(docRef, cleanData({
         ...data,
         updatedAt: serverTimestamp()
-      });
+      }));
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -136,7 +146,7 @@ export const firestoreService = {
      // but let's provide a way to seed them if empty
      for (const account of accounts) {
        if (!account.id) {
-         await addDoc(collection(db, 'accounts'), { ...account, uid });
+         await addDoc(collection(db, 'accounts'), cleanData({ ...account, uid }));
        }
      }
   },
@@ -174,10 +184,10 @@ export const firestoreService = {
     if (!uid) throw new Error('Not authenticated');
     const path = 'cards';
     try {
-      const docRef = await addDoc(collection(db, path), {
+      const docRef = await addDoc(collection(db, path), cleanData({
         ...data,
         uid,
-      });
+      }));
       return { id: docRef.id, ...data };
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
@@ -189,10 +199,10 @@ export const firestoreService = {
     if (!uid) throw new Error('Not authenticated');
     const path = 'categories';
     try {
-      const docRef = await addDoc(collection(db, path), {
+      const docRef = await addDoc(collection(db, path), cleanData({
         ...data,
         uid,
-      });
+      }));
       return { id: docRef.id, ...data };
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
@@ -202,7 +212,7 @@ export const firestoreService = {
   async updateCategory(id: string, data: any) {
     const path = `categories/${id}`;
     try {
-      await updateDoc(doc(db, 'categories', id), data);
+      await updateDoc(doc(db, 'categories', id), cleanData(data));
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
