@@ -428,24 +428,33 @@ export default function App() {
 
   const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) {
+      setErrorMessage("Usuário não identificado. Tente fazer login novamente.");
+      return;
+    }
     setIsSubmitting(true);
+    setErrorMessage(null);
+    
     const payload = {
       description: transDescription,
       amount: parseCurrency(transAmount),
       type: transType,
-      category: transCategory,
-      account: transAccount,
-      date: new Date(transDate).toISOString(),
+      category: transCategory || 'Outros',
+      account: transAccount || 'Conta Corrente',
+      date: new Date(transDate + 'T12:00:00').toISOString(), // Use midday to avoid timezone shifts
       isRecurring: isRecurring && recurrenceMode === 'continuous',
       frequency: isRecurring && recurrenceMode === 'continuous' ? transFrequency : undefined,
       installments: isRecurring && recurrenceMode === 'installments' ? parseInt(installmentsCount) : undefined
     };
 
+    console.log("Submitting transaction payload:", payload);
+
     try {
       if (editingTransaction) {
         await firestoreService.updateTransaction(editingTransaction.id.toString(), payload);
       } else {
-        const newTransactions = createRecurringOrInstallments({ ...payload, uid: user?.uid });
+        const newTransactions = createRecurringOrInstallments({ ...payload, uid: user.uid });
+        console.log("Transformed transactions:", newTransactions);
         for (const t of newTransactions) {
           await firestoreService.addTransaction(t);
         }
@@ -455,16 +464,16 @@ export default function App() {
       setSuccessMessage(editingTransaction ? "Lançamento atualizado!" : "Lançamento confirmado!");
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (e: any) {
-      console.error(e);
-      let msg = "Erro ao salvar lançamento. Verifique sua conexão.";
+      console.error("Create/Update Transaction Error:", e);
+      let msg = "Erro ao salvar: ";
       try {
-        const errObj = JSON.parse(e.message);
-        if (errObj.error.includes('permission-denied')) {
-          msg = "Sem permissão para salvar. Verifique se seu e-mail está verificado ou se os dados estão corretos.";
-        }
-      } catch {}
+        const errInfo = JSON.parse(e.message);
+        msg += errInfo.error.split(':')[0] || "Erro de permissão ou conexão.";
+      } catch {
+        msg += e.message || "Erro desconhecido.";
+      }
       setErrorMessage(msg);
-      setTimeout(() => setErrorMessage(null), 5000);
+      // Not clearing error too fast so user can report it
     } finally {
       setIsSubmitting(false);
     }
