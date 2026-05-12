@@ -5,8 +5,8 @@ import cors from "cors";
 
 // Mock Database
 let transactions: any[] = [
-  { id: 1, type: 'expense', amount: 45.90, description: 'Almoço', category: 'Alimentação', date: new Date().toISOString(), account: 'Conta Corrente' },
-  { id: 2, type: 'income', amount: 5000.00, description: 'Salário', category: 'Salário', date: new Date().toISOString(), account: 'Conta Corrente' },
+  { id: 1, type: 'expense', amount: 45.90, description: 'Almoço', category: 'Alimentação', date: new Date().toISOString(), account: 'Conta Corrente', settled: false },
+  { id: 2, type: 'income', amount: 5000.00, description: 'Salário', category: 'Salário', date: new Date().toISOString(), account: 'Conta Corrente', settled: false },
 ];
 
 let accounts = [
@@ -19,17 +19,28 @@ let cards = [
   { id: 2, name: 'Mastercard Black', limit: 20000.00, used: 1200.00, closingDate: '2026-03-15', dueDate: '2026-03-22' },
 ];
 
+let categories = [
+  { name: 'Alimentação', type: 'expense' },
+  { name: 'Salário', type: 'income' },
+  { name: 'Lazer', type: 'expense' },
+  { name: 'Moradia', type: 'expense' },
+  { name: 'Transporte', type: 'expense' },
+  { name: 'Saúde', type: 'expense' },
+  { name: 'Educação', type: 'expense' },
+  { name: 'Mercado', type: 'expense' },
+  { name: 'Assinaturas', type: 'expense' },
+  { name: 'Vendas', type: 'income' },
+  { name: 'Investimentos', type: 'income' }
+];
+
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const PORT = 3000;
 
   app.use(cors());
   app.use(express.json());
 
   // API Routes
-  app.get("/healthz", (_req, res) => {
-  res.status(200).json({ ok: true });
-});
   app.get("/api/summary", (req, res) => {
     const totalIncome = transactions.filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
     const totalExpense = transactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
@@ -40,8 +51,48 @@ async function startServer() {
       income: totalIncome,
       expense: totalExpense,
       accounts: accounts,
-      cards: cards
+      cards: cards,
+      categories: categories
     });
+  });
+
+  app.get("/api/categories", (req, res) => {
+    res.json(categories);
+  });
+
+  app.put("/api/categories/:type/:oldName", (req, res) => {
+    const { type, oldName } = req.params;
+    const { newName } = req.body;
+    const index = categories.findIndex(c => c.name === oldName && c.type === type);
+    if (index !== -1) {
+      categories[index].name = newName;
+      // Update transactions with the new category name
+      transactions = transactions.map(t => {
+        if (t.category === oldName && t.type === type) {
+          return { ...t, category: newName };
+        }
+        return t;
+      });
+      res.json(categories[index]);
+    } else {
+      res.status(404).json({ error: "Category not found" });
+    }
+  });
+
+  app.delete("/api/categories/:type/:name", (req, res) => {
+    const { type, name } = req.params;
+    categories = categories.filter(c => !(c.name === name && c.type === type));
+    res.status(204).send();
+  });
+
+  app.post("/api/categories", (req, res) => {
+    const { name, type } = req.body;
+    if (name && type && !categories.some(c => c.name === name && c.type === type)) {
+      categories.push({ name, type });
+      res.status(201).json({ name, type });
+    } else {
+      res.status(400).json({ error: "Invalid data or category already exists" });
+    }
   });
 
   app.get("/api/cards", (req, res) => {
@@ -58,10 +109,117 @@ async function startServer() {
     res.json(transactions);
   });
 
+  // Simple helper to add months/weeks
+  const addDate = (d: Date, idx: number, freq: 'monthly' | 'weekly' | 'none') => {
+    const newD = new Date(d);
+    if (freq === 'monthly') newD.setMonth(newD.getMonth() + idx);
+    if (freq === 'weekly') newD.setDate(newD.getDate() + idx * 7);
+    return newD.toISOString();
+  };
+
+  const createRecurringOrInstallments = (baseData: any) => {
+    const { date, installments, frequency, isRecurring, description, amount, type, category, account } = baseData;
+    const baseDate = new Date(date || new Date());
+    const newTransactions: any[] = [];
+
+    if (installments && installments > 1) {
+      const group = Date.now();
+      for (let i = 0; i < installments; i++) {
+        newTransactions.push({
+          id: group + i,
+          description: description,
+          amount: amount, 
+          type,
+          category,
+          account,
+          date: addDate(baseDate, i, 'monthly'),
+          installmentGroup: group,
+          settled: false
+        });
+      }
+    } else if (isRecurring) {
+      const count = frequency === 'weekly' ? 52 : 12;
+      const recurringGroup = Date.now();
+      for (let i = 0; i < count; i++) {
+        newTransactions.push({
+          id: recurringGroup + i,
+          description: description,
+          amount: amount,
+          type,
+          category,
+          account,
+          date: addDate(baseDate, i, frequency || 'monthly'),
+          isRecurringEntry: true,
+          recurringGroup,
+          settled: false
+        });
+      }
+    } else {
+      newTransactions.push({
+        id: Date.now(),
+        ...baseData,
+        date: baseDate.toISOString(),
+        settled: baseData.settled || false
+      });
+    }
+    return newTransactions;
+  };
+
   app.post("/api/transactions", (req, res) => {
-    const newTransaction = { ...req.body, id: Date.now(), date: req.body.date || new Date().toISOString() };
-    transactions.unshift(newTransaction);
-    res.status(201).json(newTransaction);
+    const newTransList = createRecurringOrInstallments(req.body);
+    transactions = [...newTransList, ...transactions];
+    res.status(201).json(newTransList[0]);
+  });
+
+  app.put("/api/transactions/:id", (req, res) => {
+    const { id } = req.params;
+    const index = transactions.findIndex(t => t.id === parseInt(id));
+    if (index !== -1) {
+      const existingTrans = transactions[index];
+      const isNowRecurring = req.body.isRecurring && !existingTrans.recurringGroup;
+      const isNowInstallments = req.body.installments > 1 && !existingTrans.installmentGroup;
+
+      if (isNowRecurring || isNowInstallments) {
+        const newTransList = createRecurringOrInstallments({ ...existingTrans, ...req.body });
+        transactions.splice(index, 1);
+        transactions = [...newTransList, ...transactions];
+        res.json(newTransList[0]);
+      } else {
+        transactions[index] = { ...existingTrans, ...req.body, id: parseInt(id) };
+        res.json(transactions[index]);
+      }
+    } else {
+      res.status(404).json({ error: "Transaction not found" });
+    }
+  });
+
+  app.delete("/api/transactions/:id", (req, res) => {
+    const { id } = req.params;
+    const { mode } = req.query; // 'single' or 'future'
+    const targetId = parseInt(id);
+    const target = transactions.find(t => t.id === targetId);
+    
+    if (!target) {
+      return res.status(404).json({ error: "Transaction not found" });
+    }
+
+    if (mode === 'future') {
+      const groupId = target.recurringGroup || target.installmentGroup;
+      if (groupId) {
+        transactions = transactions.filter(t => {
+          // If it's in the same group and the date is >= target date, delete it
+          const isSameGroup = (t.recurringGroup === groupId || t.installmentGroup === groupId);
+          const isFutureOrPresent = new Date(t.date) >= new Date(target.date);
+          return !(isSameGroup && isFutureOrPresent);
+        });
+      } else {
+        transactions = transactions.filter(t => t.id !== targetId);
+      }
+    } else {
+      transactions = transactions.filter(t => t.id !== targetId);
+    }
+    
+    res.status(204).send();
   });
 
   // Vite middleware for development

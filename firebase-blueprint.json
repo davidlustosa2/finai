@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Financial transaction record",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner user ID" },
+        "type": { "type": "string", "enum": ["income", "expense"], "description": "Transaction type" },
+        "amount": { "type": "number", "description": "Transaction amount" },
+        "description": { "type": "string", "description": "Transaction description" },
+        "category": { "type": "string", "description": "Category name" },
+        "date": { "type": "string", "format": "date-time", "description": "Transaction date" },
+        "account": { "type": "string", "description": "Account name" },
+        "settled": { "type": "boolean", "description": "Whether the transaction is settled" },
+        "installmentGroup": { "type": "number", "description": "ID for grouping installments" },
+        "recurringGroup": { "type": "number", "description": "ID for grouping recurring transactions" },
+        "isRecurringEntry": { "type": "boolean", "description": "Flag for recurring entries" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "type", "amount", "description", "category", "date"]
+    },
+    "Account": {
+      "title": "Account",
+      "description": "Financial account",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner user ID" },
+        "name": { "type": "string", "description": "Account name" },
+        "balance": { "type": "number", "description": "Current balance" },
+        "type": { "type": "string", "description": "Account type" }
+      },
+      "required": ["uid", "name", "balance"]
+    },
+    "Card": {
+      "title": "Card",
+      "description": "Credit card",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner user ID" },
+        "name": { "type": "string", "description": "Card name" },
+        "limit": { "type": "number", "description": "Credit limit" },
+        "used": { "type": "number", "description": "Used amount" },
+        "closingDate": { "type": "string", "description": "Invoice closing date" },
+        "dueDate": { "type": "string", "description": "Invoice due date" }
+      },
+      "required": ["uid", "name", "limit", "used"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Transaction category",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner user ID" },
+        "name": { "type": "string", "description": "Category name" },
+        "type": { "type": "string", "enum": ["income", "expense"], "description": "Category type" }
+      },
+      "required": ["uid", "name", "type"]
+    }
+  },
+  "firestore": {
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Main transactions collection"
+    },
+    "/accounts/{accountId}": {
+      "schema": "Account",
+      "description": "User accounts"
+    },
+    "/cards/{cardId}": {
+      "schema": "Card",
+      "description": "User credit cards"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "User custom categories"
+    }
+  }
+}

@@ -20,19 +20,22 @@ export class AIService {
       Retorne APENAS o JSON.
     `;
 
-    const response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      }
-    });
-
     try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        }
+      });
+
       return JSON.parse(response.text || "{}");
-    } catch (e) {
-      console.error("Failed to parse AI response", e);
-      return { error: "Não consegui entender o comando." };
+    } catch (e: any) {
+      console.error("AI Service Error:", e);
+      if (e.message?.includes("429") || e.message?.includes("RESOURCE_EXHAUSTED")) {
+        return { error: "O limite de uso do assistente foi atingido. Por favor, tente novamente em alguns minutos." };
+      }
+      return { error: "Não consegui entender o comando ou houve um problema na conexão." };
     }
   }
 
@@ -47,18 +50,19 @@ export class AIService {
       Retorne em formato de lista JSON: { "insights": [ { "title": "", "text": "", "type": "warning|success|info" } ] }
     `;
 
-    const response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      }
-    });
-
     try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        }
+      });
+
       return JSON.parse(response.text || '{"insights": []}');
-    } catch (e) {
-      return { insights: [] };
+    } catch (e: any) {
+      console.error("AI Insight Error:", e);
+      return { insights: [], error: e.message?.includes("429") ? "quota_exceeded" : "error" };
     }
   }
 }
