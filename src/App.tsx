@@ -694,8 +694,12 @@ export default function App() {
           <MessageSquare size={20} />
         </button>
         <div className="w-px h-6 bg-stone-200" />
-        <button className="p-2 text-stone-400 hover:text-stone-600">
-          <PlusCircle size={20} />
+        <button 
+          onClick={logout}
+          className="p-2 text-stone-400 hover:text-rose-600 transition-colors"
+          title="Sair"
+        >
+          <LogOut size={20} />
         </button>
       </nav>
 
@@ -705,14 +709,16 @@ export default function App() {
           <h1 className="text-4xl font-semibold tracking-tight">Olá, {user?.displayName?.split(' ')[0] || user?.email?.split('@')[0] || 'Usuário'}</h1>
           <p className="text-stone-500 mt-1">Veja o raio-x de sua saúde financeira hoje.</p>
         </div>
-        <div className="flex gap-3 items-center">
-          <button 
-            onClick={logout}
-            className="p-3 bg-white rounded-2xl border border-black/5 shadow-sm hover:bg-rose-50 hover:text-rose-600 transition-colors group"
-            title="Sair"
-          >
-            <LogOut size={20} className="text-stone-400 group-hover:text-rose-600" />
-          </button>
+        <div className="flex gap-4 items-center">
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={logout}
+              className="px-4 py-2 bg-white rounded-xl border border-black/5 shadow-sm text-xs font-semibold text-stone-500 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-100 transition-all flex items-center gap-2 group"
+            >
+              <LogOut size={14} className="group-hover:scale-110 transition-transform" />
+              Sair
+            </button>
+          </div>
           <div className="relative flex items-center">
             <AnimatePresence>
               {isSearchOpen && (
