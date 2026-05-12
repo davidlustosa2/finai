@@ -13,6 +13,18 @@
         "date": { "type": "string", "format": "date-time", "description": "Transaction date (Planned)" },
         "realizedAmount": { "type": "number", "description": "Actual realized amount" },
         "realizedDate": { "type": "string", "format": "date-time", "description": "Date when transaction was actually realized" },
+        "payments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "amount": { "type": "number" },
+              "date": { "type": "string", "format": "date-time" }
+            },
+            "required": ["amount", "date"]
+          },
+          "description": "List of payments for this transaction"
+        },
         "account": { "type": "string", "description": "Account name" },
         "settled": { "type": "boolean", "description": "Whether the transaction is settled" },
         "installmentGroup": { "type": "number", "description": "ID for grouping installments" },

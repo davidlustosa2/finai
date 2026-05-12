@@ -50,6 +50,11 @@ import {
 import { AIService } from './services/aiService';
 
 // --- Types ---
+interface Payment {
+  amount: number;
+  date: string;
+}
+
 interface Transaction {
   id: string | number;
   type: 'income' | 'expense' | 'transfer';
@@ -59,6 +64,7 @@ interface Transaction {
   date: string;
   realizedAmount?: number;
   realizedDate?: string;
+  payments?: Payment[];
   account: string;
   isRecurringEntry?: boolean;
   recurringGroup?: number;
@@ -70,6 +76,9 @@ interface Summary {
   balance: number;
   income: number;
   expense: number;
+  realizedBalance?: number;
+  realizedIncome?: number;
+  realizedExpense?: number;
   accounts: any[];
   cards: any[];
   categories: { name: string, type: 'income' | 'expense' }[];
@@ -98,17 +107,40 @@ const Card = ({ children, className = "" }: { children: React.ReactNode, classNa
   </div>
 );
 
-const StatCard = ({ title, value, icon: Icon, color }: any) => (
-  <Card className="flex flex-col gap-2">
+const StatCard = ({ title, value, realizedValue, icon: Icon, color }: any) => (
+  <Card className="flex flex-col gap-3 group hover:shadow-lg transition-all duration-300">
     <div className="flex justify-between items-start">
-      <span className="text-sm font-medium text-stone-500 uppercase tracking-wider">{title}</span>
-      <div className={`p-2 rounded-xl ${color}`}>
-        <Icon size={18} className="text-white" />
+      <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">{title}</span>
+      <div className={`p-2 rounded-xl ${color} shadow-sm group-hover:scale-110 transition-transform`}>
+        <Icon size={16} className="text-white" />
       </div>
     </div>
-    <span className="text-2xl font-semibold tracking-tight">
-      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value)}
-    </span>
+    <div className="space-y-2">
+      <div className="flex flex-col">
+        <span className="text-2xl font-bold tracking-tight text-stone-900 group-hover:translate-x-1 transition-transform">
+          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value)}
+        </span>
+        <span className="text-[8px] font-black text-stone-300 uppercase tracking-tighter">Previsto</span>
+      </div>
+      
+      {realizedValue !== undefined && (
+        <div className="pt-2 border-t border-stone-50">
+          <div className="flex justify-between items-center mb-1.5">
+            <span className="text-[9px] font-bold text-stone-400 uppercase tracking-wider">Realizado</span>
+            <span className={`text-[10px] font-bold ${realizedValue >= value && title.includes('Receita') ? 'text-emerald-500' : realizedValue > value && title.includes('Despesa') ? 'text-rose-500' : 'text-stone-600'}`}>
+              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(realizedValue)}
+            </span>
+          </div>
+          <div className="h-1 bg-stone-100 rounded-full overflow-hidden">
+            <motion.div 
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.min(100, Math.abs((realizedValue / (value || 1)) * 100))}%` }}
+              className={`h-full ${color} opacity-40`}
+            />
+          </div>
+        </div>
+      )}
+    </div>
   </Card>
 );
 
@@ -143,8 +175,7 @@ export default function App() {
   const [transCategory, setTransCategory] = useState('');
   const [transAccount, setTransAccount] = useState('Conta Corrente');
   const [transDate, setTransDate] = useState(new Date().toISOString().split('T')[0]);
-  const [transRealizedAmount, setTransRealizedAmount] = useState('');
-  const [transRealizedDate, setTransRealizedDate] = useState('');
+  const [transPayments, setTransPayments] = useState<{ amount: string, date: string }[]>([{ amount: '', date: new Date().toISOString().split('T')[0] }]);
   const [showRealizedFields, setShowRealizedFields] = useState(false);
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurrenceMode, setRecurrenceMode] = useState<'continuous' | 'installments'>('continuous');
@@ -171,6 +202,9 @@ export default function App() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
   
+  const [showQuitarWarning, setShowQuitarWarning] = useState(false);
+  const [transactionToQuitar, setTransactionToQuitar] = useState<Transaction | null>(null);
+
   // New filtering states
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -305,10 +339,21 @@ export default function App() {
   const metrics = React.useMemo(() => {
     return filteredTransactions.reduce((acc, t) => {
       const status = getTransactionStatus(t);
+      const amount = t.amount;
+      
+      let realizedAmount = 0;
+      if (t.payments && t.payments.length > 0) {
+        realizedAmount = t.payments.reduce((sum, p) => sum + p.amount, 0);
+      } else if (t.settled) {
+        realizedAmount = t.realizedAmount !== undefined ? t.realizedAmount : t.amount;
+      }
+
       if (t.type === 'income') {
-        acc.income += t.amount;
+        acc.income += amount;
+        acc.realizedIncome += realizedAmount;
       } else {
-        acc.expenses += t.amount;
+        acc.expenses += amount;
+        acc.realizedExpenses += realizedAmount;
       }
       
       if (!t.settled && t.type === 'expense') {
@@ -317,10 +362,11 @@ export default function App() {
       }
       
       return acc;
-    }, { income: 0, expenses: 0, overdueCount: 0, dueSoonCount: 0 });
+    }, { income: 0, expenses: 0, realizedIncome: 0, realizedExpenses: 0, overdueCount: 0, dueSoonCount: 0 });
   }, [filteredTransactions, getTransactionStatus]);
 
   const currentBalance = metrics.income - metrics.expenses;
+  const realizedBalance = metrics.realizedIncome - metrics.realizedExpenses;
 
   const fetchData = async () => {
     if (!user) return;
@@ -337,10 +383,17 @@ export default function App() {
       const totalExpense = (transactionsData as any[]).filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
       const balance = totalIncome - totalExpense;
 
+      const totalRealizedIncome = (transactionsData as any[]).filter(t => t.type === 'income' && t.settled).reduce((acc, t) => acc + (t.realizedAmount !== undefined ? t.realizedAmount : t.amount), 0);
+      const totalRealizedExpense = (transactionsData as any[]).filter(t => t.type === 'expense' && t.settled).reduce((acc, t) => acc + (t.realizedAmount !== undefined ? t.realizedAmount : t.amount), 0);
+      const realizedBalance = totalRealizedIncome - totalRealizedExpense;
+
       const summaryData: Summary = {
         balance,
         income: totalIncome,
         expense: totalExpense,
+        realizedBalance,
+        realizedIncome: totalRealizedIncome,
+        realizedExpense: totalRealizedExpense,
         accounts: accountsData.length > 0 ? accountsData : [
           { id: '1', name: 'Conta Corrente', balance: 4500.00, type: 'checking' },
           { id: '2', name: 'Reserva', balance: 12000.00, type: 'savings' },
@@ -448,18 +501,30 @@ export default function App() {
     setIsSubmitting(true);
     setErrorMessage(null);
     
-    const payload = {
+    const payments = showRealizedFields 
+      ? transPayments
+          .filter(p => p.amount && p.date)
+          .map(p => ({
+            amount: parseCurrency(p.amount),
+            date: new Date(p.date + 'T12:00:00').toISOString()
+          }))
+      : [];
+
+    const totalPayments = payments.reduce((acc, p) => acc + p.amount, 0);
+    const plannedAmount = parseCurrency(transAmount);
+
+    const payload: any = {
       description: transDescription,
-      amount: parseCurrency(transAmount),
+      amount: plannedAmount,
       type: transType,
       category: transCategory || 'Outros',
       account: transAccount || 'Conta Corrente',
-      date: new Date(transDate + 'T12:00:00').toISOString(), // Use midday to avoid timezone shifts
-      realizedAmount: showRealizedFields ? parseCurrency(transRealizedAmount) : undefined,
-      realizedDate: showRealizedFields && transRealizedDate ? new Date(transRealizedDate + 'T12:00:00').toISOString() : undefined,
+      date: new Date(transDate + 'T12:00:00').toISOString(),
       isRecurring: isRecurring && recurrenceMode === 'continuous',
       frequency: isRecurring && recurrenceMode === 'continuous' ? transFrequency : undefined,
-      installments: isRecurring && recurrenceMode === 'installments' ? parseInt(installmentsCount) : undefined
+      installments: isRecurring && recurrenceMode === 'installments' ? parseInt(installmentsCount) : undefined,
+      payments: payments.length > 0 ? payments : undefined,
+      settled: totalPayments >= plannedAmount && plannedAmount > 0
     };
 
     console.log("Submitting transaction payload:", payload);
@@ -540,11 +605,21 @@ export default function App() {
     setTransCategory(t.category);
     setTransAccount(t.account);
     setTransDate(new Date(t.date).toISOString().split('T')[0]);
-    if (t.realizedAmount !== undefined || t.realizedDate) {
-      setTransRealizedAmount(t.realizedAmount !== undefined ? maskCurrency((t.realizedAmount * 100).toFixed(0)) : '');
-      setTransRealizedDate(t.realizedDate ? new Date(t.realizedDate).toISOString().split('T')[0] : '');
+    if ((t.payments && t.payments.length > 0) || t.realizedAmount !== undefined || t.realizedDate) {
+      if (t.payments && t.payments.length > 0) {
+        setTransPayments(t.payments.map(p => ({
+          amount: maskCurrency((p.amount * 100).toFixed(0)),
+          date: new Date(p.date).toISOString().split('T')[0]
+        })));
+      } else {
+        setTransPayments([{
+          amount: t.realizedAmount !== undefined ? maskCurrency((t.realizedAmount * 100).toFixed(0)) : '',
+          date: t.realizedDate ? new Date(t.realizedDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+        }]);
+      }
       setShowRealizedFields(true);
     } else {
+      setTransPayments([{ amount: '', date: new Date().toISOString().split('T')[0] }]);
       setShowRealizedFields(false);
     }
     setIsRecurring(!!(t.recurringGroup || t.installmentGroup));
@@ -565,8 +640,7 @@ export default function App() {
     setTransCategory('');
     setTransAccount('Conta Corrente');
     setTransDate(new Date().toISOString().split('T')[0]);
-    setTransRealizedAmount('');
-    setTransRealizedDate('');
+    setTransPayments([{ amount: '', date: new Date().toISOString().split('T')[0] }]);
     setShowRealizedFields(false);
     setIsRecurring(false);
     setRecurrenceMode('continuous');
@@ -627,33 +701,105 @@ export default function App() {
     }
   };
   
+  const handleAddPaymentClick = (t: Transaction, e: React.MouseEvent) => {
+    setSettlingTransaction(t);
+    // If there are already payments, don't pre-fill with total amount? 
+    // Actually, maybe pre-fill with remaining amount.
+    const totalPayments = (t.payments || []).reduce((sum, p) => sum + p.amount, 0);
+    const remaining = Math.max(0, t.amount - totalPayments);
+    setSettleAmount(maskCurrency((remaining * 100).toFixed(0)));
+    setSettleDate(new Date().toISOString().split('T')[0]);
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    setSettleCoords({ 
+      top: rect.top, 
+      left: rect.left 
+    });
+    
+    setShowSettleModal(true);
+  };
+
+  const handleQuitarClick = async (t: Transaction) => {
+    const totalPayments = (t.payments || []).reduce((sum, p) => sum + p.amount, 0);
+    
+    if (totalPayments === 0) {
+      // Case 1: zero payments
+      setIsSubmittingSettle(true);
+      try {
+        await firestoreService.updateTransaction(t.id.toString(), {
+          settled: true,
+          payments: [{
+            amount: t.amount,
+            date: new Date().toISOString()
+          }]
+        });
+        fetchData();
+        setSuccessMessage("Lançamento quitado com sucesso!");
+        setTimeout(() => setSuccessMessage(null), 3000);
+      } catch (e) {
+        console.error(e);
+        setErrorMessage("Erro ao quitar lançamento.");
+      } finally {
+        setIsSubmittingSettle(false);
+      }
+    } else if (totalPayments < t.amount) {
+      // Case 2: total < planned
+      setTransactionToQuitar(t);
+      setShowQuitarWarning(true);
+    } else {
+      // Case 3: total >= planned
+      setIsSubmittingSettle(true);
+      try {
+        await firestoreService.updateTransaction(t.id.toString(), {
+          settled: true
+        });
+        fetchData();
+        setSuccessMessage("Lançamento quitado!");
+        setTimeout(() => setSuccessMessage(null), 3000);
+      } catch (e) {
+        console.error(e);
+        setErrorMessage("Erro ao quitar lançamento.");
+      } finally {
+        setIsSubmittingSettle(false);
+      }
+    }
+  };
+
+  const handleConfirmQuitarAnyway = async () => {
+    if (!transactionToQuitar) return;
+    setIsSubmittingSettle(true);
+    try {
+      await firestoreService.updateTransaction(transactionToQuitar.id.toString(), {
+        settled: true
+      });
+      setShowQuitarWarning(false);
+      setTransactionToQuitar(null);
+      fetchData();
+      setSuccessMessage("Lançamento quitado (valor parcial).");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (e) {
+      console.error(e);
+      setErrorMessage("Erro ao quitar lançamento.");
+    } finally {
+      setIsSubmittingSettle(false);
+    }
+  };
+
   const handleToggleSettle = async (t: Transaction, e: React.MouseEvent) => {
     if (t.settled) {
       // Extornar quitação (just unset settled and realized fields)
       try {
         await firestoreService.updateTransaction(t.id.toString(), { 
           settled: false,
-          realizedAmount: null, // Firestore update with null can be tricky, but let's assume we want to clear it
-          realizedDate: null 
+          realizedAmount: null, 
+          realizedDate: null,
+          payments: t.payments || [] // Keep payments if it was partially paid then quitado anyway? 
+          // Usually extornar means back to pending.
         });
         fetchData();
       } catch (e) {
         console.error(e);
       }
-    } else {
-      // Open settle modal
-      setSettlingTransaction(t);
-      setSettleAmount(maskCurrency((t.amount * 100).toFixed(0)));
-      setSettleDate(new Date(t.date).toISOString().split('T')[0]);
-      
-      // Calculate position relative to viewport for fixed positioning
-      const rect = e.currentTarget.getBoundingClientRect();
-      setSettleCoords({ 
-        top: rect.top, 
-        left: rect.left 
-      });
-      
-      setShowSettleModal(true);
     }
   };
 
@@ -661,19 +807,30 @@ export default function App() {
     if (!settlingTransaction) return;
     setIsSubmittingSettle(true);
     try {
+      const newPayment = {
+        amount: parseCurrency(settleAmount),
+        date: new Date(settleDate + 'T12:00:00').toISOString()
+      };
+      
+      const updatedPayments = [...(settlingTransaction.payments || []), newPayment];
+      const totalPaid = updatedPayments.reduce((sum, p) => sum + p.amount, 0);
+      
+      // The user specified: "O adicionar pagamento não deve quitar automaticamente o lançamento, só registrar o novo pagamento."
+      // BUT if it reaches the total, should it settle?
+      // Actually, let's strictly follow: "não deve quitar automaticamente".
+      
       await firestoreService.updateTransaction(settlingTransaction.id.toString(), {
-        settled: true,
-        realizedAmount: parseCurrency(settleAmount),
-        realizedDate: new Date(settleDate + 'T12:00:00').toISOString()
+        settled: false, // Explicitly false as per request
+        payments: updatedPayments
       });
       setShowSettleModal(false);
       setSettlingTransaction(null);
       fetchData();
-      setSuccessMessage("Lançamento quitado com sucesso!");
+      setSuccessMessage("Pagamento adicionado!");
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (e: any) {
       console.error(e);
-      setErrorMessage("Erro ao quitar lançamento.");
+      setErrorMessage("Erro ao adicionar pagamento.");
       setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setIsSubmittingSettle(false);
@@ -896,9 +1053,27 @@ export default function App() {
             >
               {/* Main Stats */}
               <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <StatCard title="Saldo Total" value={summary?.balance || 0} icon={Wallet} color="bg-stone-900" />
-                <StatCard title="Receitas" value={summary?.income || 0} icon={ArrowUpRight} color="bg-emerald-500" />
-                <StatCard title="Despesas" value={summary?.expense || 0} icon={ArrowDownLeft} color="bg-rose-500" />
+                <StatCard 
+                  title="Saldo Total" 
+                  value={summary?.balance || 0} 
+                  realizedValue={summary?.realizedBalance}
+                  icon={Wallet} 
+                  color="bg-stone-900" 
+                />
+                <StatCard 
+                  title="Receitas" 
+                  value={summary?.income || 0} 
+                  realizedValue={summary?.realizedIncome}
+                  icon={ArrowUpRight} 
+                  color="bg-emerald-500" 
+                />
+                <StatCard 
+                  title="Despesas" 
+                  value={summary?.expense || 0} 
+                  realizedValue={summary?.realizedExpense}
+                  icon={ArrowDownLeft} 
+                  color="bg-rose-500" 
+                />
                 
                 {/* Main Chart */}
                 <Card className="md:col-span-3 h-[400px]">
@@ -1258,9 +1433,20 @@ export default function App() {
                   className={`p-5 rounded-3xl border transition-all text-left group active:scale-95 hover:-translate-y-1 ${filterType === 'income' && filterStatus === 'all' ? 'bg-emerald-600 border-emerald-600 shadow-xl shadow-emerald-200' : 'bg-white border-black/5 shadow-sm hover:border-emerald-200 hover:shadow-md'}`}
                 >
                   <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 transition-colors ${filterType === 'income' && filterStatus === 'all' ? 'text-emerald-100' : 'text-stone-400 group-hover:text-emerald-500'}`}>Receitas</p>
-                  <p className={`text-lg font-bold transition-colors ${filterType === 'income' && filterStatus === 'all' ? 'text-white' : 'text-emerald-600'}`}>
-                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.income)}
-                  </p>
+                  <div className="space-y-1">
+                    <div>
+                      <p className={`text-lg font-bold transition-colors ${filterType === 'income' && filterStatus === 'all' ? 'text-white' : 'text-emerald-600'}`}>
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.income)}
+                      </p>
+                      <p className={`text-[8px] font-bold uppercase transition-colors ${filterType === 'income' && filterStatus === 'all' ? 'text-emerald-200' : 'text-stone-300'}`}>Previsto</p>
+                    </div>
+                    <div className={`mt-2 pt-2 border-t flex justify-between items-center ${filterType === 'income' && filterStatus === 'all' ? 'border-emerald-500' : 'border-stone-50'}`}>
+                      <span className={`text-[8px] font-bold uppercase ${filterType === 'income' && filterStatus === 'all' ? 'text-white' : 'text-stone-400'}`}>Realizado</span>
+                      <span className={`text-[10px] font-bold ${filterType === 'income' && filterStatus === 'all' ? 'text-white' : 'text-emerald-600'}`}>
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.realizedIncome)}
+                      </span>
+                    </div>
+                  </div>
                 </button>
 
                 <button 
@@ -1271,16 +1457,38 @@ export default function App() {
                   className={`p-5 rounded-3xl border transition-all text-left group active:scale-95 hover:-translate-y-1 ${filterType === 'expense' && filterStatus === 'all' ? 'bg-rose-600 border-rose-600 shadow-xl shadow-rose-200' : 'bg-white border-black/5 shadow-sm hover:border-rose-200 hover:shadow-md'}`}
                 >
                   <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 transition-colors ${filterType === 'expense' && filterStatus === 'all' ? 'text-rose-100' : 'text-stone-400 group-hover:text-rose-500'}`}>Despesas</p>
-                  <p className={`text-lg font-bold transition-colors ${filterType === 'expense' && filterStatus === 'all' ? 'text-white' : 'text-rose-600'}`}>
-                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.expenses)}
-                  </p>
+                  <div className="space-y-1">
+                    <div>
+                      <p className={`text-lg font-bold transition-colors ${filterType === 'expense' && filterStatus === 'all' ? 'text-white' : 'text-rose-600'}`}>
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.expenses)}
+                      </p>
+                      <p className={`text-[8px] font-bold uppercase transition-colors ${filterType === 'expense' && filterStatus === 'all' ? 'text-rose-200' : 'text-stone-300'}`}>Previsto</p>
+                    </div>
+                    <div className={`mt-2 pt-2 border-t flex justify-between items-center ${filterType === 'expense' && filterStatus === 'all' ? 'border-rose-500' : 'border-stone-50'}`}>
+                      <span className={`text-[8px] font-bold uppercase ${filterType === 'expense' && filterStatus === 'all' ? 'text-white' : 'text-stone-400'}`}>Realizado</span>
+                      <span className={`text-[10px] font-bold ${filterType === 'expense' && filterStatus === 'all' ? 'text-white' : 'text-rose-600'}`}>
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.realizedExpenses)}
+                      </span>
+                    </div>
+                  </div>
                 </button>
 
                 <div className="bg-white p-5 rounded-3xl border border-black/5 shadow-sm hover:shadow-md transition-all">
                   <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-1">Saldo</p>
-                  <p className={`text-lg font-bold ${currentBalance >= 0 ? 'text-stone-900' : 'text-rose-600'}`}>
-                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(currentBalance)}
-                  </p>
+                  <div className="space-y-1">
+                    <div>
+                      <p className={`text-lg font-bold ${currentBalance >= 0 ? 'text-stone-900' : 'text-rose-600'}`}>
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(currentBalance)}
+                      </p>
+                      <p className="text-[8px] font-bold text-stone-300 uppercase">Previsto</p>
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-stone-50 flex justify-between items-center">
+                      <span className="text-[8px] font-bold text-stone-400 uppercase">Realizado</span>
+                      <span className={`text-[10px] font-bold ${realizedBalance >= 0 ? 'text-stone-900' : 'text-rose-600'}`}>
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(realizedBalance)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 <button 
@@ -1498,23 +1706,20 @@ export default function App() {
                           <div className="h-px bg-stone-100 w-full" />
                         </div>
 
-                        <div className="pt-2 flex flex-wrap gap-2">
+                        <div className="pt-2">
                           <button 
                             type="button" 
-                            onClick={() => setShowRealizedFields(!showRealizedFields)}
+                            onClick={() => {
+                              const nextValue = !showRealizedFields;
+                              setShowRealizedFields(nextValue);
+                              if (nextValue && transPayments.length === 0) {
+                                setTransPayments([{ amount: transAmount, date: new Date().toISOString().split('T')[0] }]);
+                              }
+                            }}
                             className={`flex items-center gap-2 text-[10px] font-medium px-3 py-1.5 rounded-full border transition-all ${showRealizedFields ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-transparent border-stone-200 text-stone-400 hover:text-stone-600'}`}
                           >
                             <CheckCircle2 size={12} />
-                            {showRealizedFields ? 'Quitar Lançamento' : 'Quitar Lançamento'}
-                          </button>
-                          
-                          <button 
-                            type="button" 
-                            onClick={() => setIsRecurring(!isRecurring)}
-                            className={`flex items-center gap-2 text-[10px] font-medium px-3 py-1.5 rounded-full border transition-all ${isRecurring ? 'bg-stone-900 border-stone-900 text-white' : 'bg-transparent border-stone-200 text-stone-400 hover:text-stone-600'}`}
-                          >
-                            <Repeat size={12} />
-                            {isRecurring ? 'Lançamento Recorrente' : 'Marcar como Recorrente'}
+                            Adicionar Pagamento
                           </button>
                         </div>
 
@@ -1524,32 +1729,72 @@ export default function App() {
                               initial={{ opacity: 0, height: 0 }}
                               animate={{ opacity: 1, height: 'auto' }}
                               exit={{ opacity: 0, height: 0 }}
-                              className="overflow-hidden space-y-4 pt-4 border-t border-emerald-100 bg-emerald-50/30 p-4 rounded-3xl"
+                              className="overflow-hidden space-y-4 pt-4 border-t border-emerald-100 bg-emerald-50/30 p-4 rounded-3xl mt-4"
                             >
-                              <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                  <label className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block mb-1">Valor de Quitação</label>
-                                  <input 
-                                    type="text" 
-                                    value={transRealizedAmount}
-                                    onChange={(e) => setTransRealizedAmount(maskCurrency(e.target.value))}
-                                    placeholder="0,00"
-                                    className="w-full bg-white border border-emerald-100 rounded-2xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-sm font-medium text-emerald-700"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block mb-1">Data Quitação</label>
-                                  <input 
-                                    type="date" 
-                                    value={transRealizedDate}
-                                    onChange={(e) => setTransRealizedDate(e.target.value)}
-                                    className="w-full bg-white border border-emerald-100 rounded-2xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-sm font-medium text-emerald-700"
-                                  />
-                                </div>
+                              <div className="space-y-4">
+                                {transPayments.map((payment, index) => (
+                                  <div key={index} className="grid grid-cols-2 gap-4 relative p-4 bg-white/50 rounded-2xl border border-emerald-100/50">
+                                    <div>
+                                      <label className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block mb-1">Valor Pagamento</label>
+                                      <input 
+                                        type="text" 
+                                        value={payment.amount}
+                                        onChange={(e) => {
+                                          const newPayments = [...transPayments];
+                                          newPayments[index].amount = maskCurrency(e.target.value);
+                                          setTransPayments(newPayments);
+                                        }}
+                                        placeholder="0,00"
+                                        className="w-full bg-white border border-emerald-100 rounded-2xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-sm font-medium text-emerald-700"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block mb-1">Data Pagamento</label>
+                                      <input 
+                                        type="date" 
+                                        value={payment.date}
+                                        onChange={(e) => {
+                                          const newPayments = [...transPayments];
+                                          newPayments[index].date = e.target.value;
+                                          setTransPayments(newPayments);
+                                        }}
+                                        className="w-full bg-white border border-emerald-100 rounded-2xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-sm font-medium text-emerald-700"
+                                      />
+                                    </div>
+                                    {transPayments.length > 1 && (
+                                      <button 
+                                        type="button"
+                                        onClick={() => setTransPayments(transPayments.filter((_, i) => i !== index))}
+                                        className="absolute -right-2 -top-2 p-1 bg-white rounded-full shadow-sm text-stone-400 hover:text-rose-500 transition-colors border border-stone-200"
+                                      >
+                                        <X size={10} />
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                                <button 
+                                  type="button"
+                                  onClick={() => setTransPayments([...transPayments, { amount: '', date: new Date().toISOString().split('T')[0] }])}
+                                  className="w-full py-3 border-2 border-dashed border-emerald-200 rounded-2xl text-[10px] font-bold text-emerald-600 uppercase tracking-widest hover:bg-emerald-50 transition-all flex items-center justify-center gap-2"
+                                >
+                                  <Plus size={12} />
+                                  Adicionar Pagamento
+                                </button>
                               </div>
                             </motion.div>
                           )}
                         </AnimatePresence>
+
+                        <div className="pt-4 border-t border-stone-50 mt-4">
+                          <button 
+                            type="button" 
+                            onClick={() => setIsRecurring(!isRecurring)}
+                            className={`flex items-center gap-2 text-[10px] font-medium px-3 py-1.5 rounded-full border transition-all ${isRecurring ? 'bg-stone-900 border-stone-900 text-white' : 'bg-transparent border-stone-200 text-stone-400 hover:text-stone-600'}`}
+                          >
+                            <Repeat size={12} />
+                            {isRecurring ? 'Lançamento Recorrente' : 'Marcar como Recorrente'}
+                          </button>
+                        </div>
 
                         <AnimatePresence>
                           {isRecurring && (
@@ -1907,12 +2152,6 @@ export default function App() {
                                             {t.isRecurringEntry ? 'Recorrente' : 'Parcelado'}
                                           </span>
                                         )}
-                                        {t.realizedDate && (
-                                          <span className="text-[9px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded flex items-center gap-1 uppercase tracking-wider">
-                                            <CheckCircle2 size={10} />
-                                            Realizado em {new Date(t.realizedDate).toLocaleDateString('pt-BR')}
-                                          </span>
-                                        )}
                                       </div>
                                     </div>
                                   </div>
@@ -1921,22 +2160,43 @@ export default function App() {
                                 <td className={`py-4 text-sm font-semibold text-right ${t.settled ? 'text-stone-400' : (t.type === 'income' ? 'text-emerald-600' : 'text-rose-600')}`}>
                                    <div className="flex flex-col items-end">
                                      <span>{t.type === 'income' ? '+' : '-'} {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.amount)}</span>
-                                     {t.realizedAmount !== undefined && (
-                                       <span className="text-[10px] font-medium text-emerald-500">
-                                         {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(t.realizedAmount)}
-                                       </span>
-                                     )}
+                                     <span className="text-[10px] font-medium text-stone-400">
+                                       {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
+                                         t.payments && t.payments.length > 0 
+                                           ? t.payments.reduce((sum, p) => sum + p.amount, 0)
+                                           : (t.realizedAmount !== undefined ? t.realizedAmount : 0)
+                                       )}
+                                     </span>
                                    </div>
                                  </td>
                                  <td className="py-4 text-right">
                                    <div className="flex justify-end gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-all duration-300 relative">
-                                    <button 
-                                      onClick={(e) => handleToggleSettle(t, e)} 
-                                      className={`p-2 rounded-lg transition-all hover:scale-110 active:scale-90 ${t.settled ? 'bg-emerald-100 text-emerald-600 shadow-sm' : 'hover:bg-stone-200 text-stone-400 hover:text-stone-600 hover:shadow-md'}`}
-                                      title={t.settled ? "Extornar quitação" : "Quitar lançamento"}
-                                    >
-                                      <CheckCircle2 size={16} />
-                                    </button>
+                                    {!t.settled ? (
+                                      <>
+                                        <button 
+                                          onClick={(e) => handleAddPaymentClick(t, e)} 
+                                          className="p-2 rounded-lg transition-all hover:scale-110 active:scale-90 hover:bg-stone-200 text-stone-400 hover:text-stone-600 hover:shadow-md"
+                                          title="Adicionar Pagamento"
+                                        >
+                                          <Plus size={16} />
+                                        </button>
+                                        <button 
+                                          onClick={() => handleQuitarClick(t)} 
+                                          className="p-2 rounded-lg transition-all hover:scale-110 active:scale-90 hover:bg-emerald-50 text-emerald-500 hover:text-emerald-600 hover:shadow-md"
+                                          title="Quitar"
+                                        >
+                                          <CheckCircle2 size={16} />
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <button 
+                                        onClick={(e) => handleToggleSettle(t, e)} 
+                                        className="p-2 rounded-lg transition-all hover:scale-110 active:scale-90 bg-emerald-100 text-emerald-600 shadow-sm"
+                                        title="Reverter Quitação"
+                                      >
+                                        <CheckCircle2 size={16} />
+                                      </button>
+                                    )}
                                     <button onClick={() => handleEditClick(t)} className="p-2 hover:bg-stone-200 hover:scale-110 active:scale-90 hover:shadow-md rounded-lg text-stone-500 transition-all" title="Visualizar / Editar"><Edit2 size={14} /></button>
                                     {!t.settled && (
                                       <button onClick={() => confirmDelete(t)} className="p-2 hover:bg-rose-100 hover:scale-110 active:scale-90 hover:shadow-md rounded-lg text-rose-500 transition-all"><Trash2 size={14} /></button>
@@ -2263,12 +2523,12 @@ export default function App() {
                     <div className="w-8 h-8 bg-emerald-50 text-emerald-500 rounded-xl flex items-center justify-center">
                       <CheckCircle2 size={16} />
                     </div>
-                    <h4 className="text-xs font-bold text-stone-900 uppercase tracking-wider">Quitar Lançamento</h4>
+                    <h4 className="text-xs font-bold text-stone-900 uppercase tracking-wider">Adicionar Pagamento</h4>
                   </div>
 
                   <div className="space-y-3">
                     <div>
-                      <label className="text-[8px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Valor de Quitação</label>
+                      <label className="text-[8px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Valor Pagamento</label>
                       <input 
                         type="text" 
                         value={settleAmount}
@@ -2277,7 +2537,7 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="text-[8px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Data Quitação</label>
+                      <label className="text-[8px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Data Pagamento</label>
                       <input 
                         type="date" 
                         value={settleDate}
@@ -2305,6 +2565,65 @@ export default function App() {
                 </div>
               </motion.div>
             </div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showQuitarWarning && transactionToQuitar && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md"
+              onClick={(e) => e.target === e.currentTarget && setShowQuitarWarning(false)}
+            >
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5"
+              >
+                <div className="p-8 text-center">
+                  <div className="w-16 h-16 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                    <AlertCircle size={32} />
+                  </div>
+                  <h3 className="text-xl font-bold text-stone-900 tracking-tight">Pagamento Incompleto</h3>
+                  <p className="text-sm text-stone-500 mt-2 leading-relaxed">
+                    Os pagamentos registrados (R$ {(transactionToQuitar.payments || []).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}) são menores que o valor previsto (R$ {transactionToQuitar.amount.toFixed(2)}).
+                  </p>
+
+                  <div className="mt-8 space-y-3">
+                    <button 
+                      onClick={(e) => {
+                        setShowQuitarWarning(false);
+                        // Mock event for coordinates
+                        const mockEvent = {
+                          currentTarget: {
+                            getBoundingClientRect: () => ({ top: window.innerHeight / 2, left: window.innerWidth / 2 + 150 })
+                          }
+                        } as any;
+                        handleAddPaymentClick(transactionToQuitar, mockEvent);
+                      }}
+                      className="w-full py-4 bg-stone-900 text-white rounded-2xl text-sm font-bold hover:bg-stone-800 transition-all shadow-xl shadow-stone-200 active:scale-95"
+                    >
+                      Adicionar Pagamento
+                    </button>
+                    <button 
+                      onClick={handleConfirmQuitarAnyway}
+                      className="w-full py-4 bg-white border border-stone-200 text-stone-900 rounded-2xl text-sm font-bold hover:bg-stone-50 transition-all active:scale-95"
+                    >
+                      Quitar assim mesmo
+                    </button>
+                    <button 
+                      onClick={() => setShowQuitarWarning(false)}
+                      className="w-full py-2 text-stone-400 text-[10px] font-bold uppercase tracking-widest hover:text-stone-600 transition-colors"
+                    >
+                      Voltar
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
           )}
         </AnimatePresence>
 
