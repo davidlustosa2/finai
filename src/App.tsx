@@ -702,7 +702,7 @@ export default function App() {
       {/* Header */}
       <header className="max-w-7xl mx-auto px-6 pt-12 pb-8 flex justify-between items-end">
         <div>
-          <h1 className="text-4xl font-semibold tracking-tight">Olá, {user?.displayName?.split(' ')[0] || 'David'}</h1>
+          <h1 className="text-4xl font-semibold tracking-tight">Olá, {user?.displayName?.split(' ')[0] || user?.email?.split('@')[0] || 'Usuário'}</h1>
           <p className="text-stone-500 mt-1">Veja o raio-x de sua saúde financeira hoje.</p>
         </div>
         <div className="flex gap-3 items-center">
