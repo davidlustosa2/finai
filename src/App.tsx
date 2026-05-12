@@ -380,12 +380,25 @@ export default function App() {
     }
   }, [user]);
 
+  const maskCurrency = (value: string) => {
+    const onlyDigits = value.replace(/\D/g, '');
+    const cents = parseInt(onlyDigits || '0', 10);
+    return new Intl.NumberFormat('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(cents / 100);
+  };
+
+  const parseCurrency = (formattedValue: string) => {
+    return (parseInt(formattedValue.replace(/\D/g, ''), 10) || 0) / 100;
+  };
+
   const handleCreateCard = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       await firestoreService.addCard({
         name: newCardName,
-        limit: parseFloat(newCardLimit),
+        limit: parseCurrency(newCardLimit),
         used: 0,
         closingDate: newCardClosing,
         dueDate: newCardDue
@@ -406,7 +419,7 @@ export default function App() {
     e.preventDefault();
     const payload = {
       description: transDescription,
-      amount: parseFloat(transAmount),
+      amount: parseCurrency(transAmount),
       type: transType,
       category: transCategory,
       account: transAccount,
@@ -473,7 +486,7 @@ export default function App() {
   const handleEditClick = (t: Transaction) => {
     setEditingTransaction(t);
     setTransDescription(t.description);
-    setTransAmount(t.amount.toString());
+    setTransAmount(maskCurrency((t.amount * 100).toFixed(0)));
     setTransType(t.type as 'income' | 'expense');
     setTransCategory(t.category);
     setTransAccount(t.account);
@@ -1004,11 +1017,11 @@ export default function App() {
                     <div>
                       <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Limite Total</label>
                       <input 
-                        type="number" 
+                        type="text" 
                         value={newCardLimit}
-                        onChange={(e) => setNewCardLimit(e.target.value)}
-                        placeholder="Ex: 5000"
-                        className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
+                        onChange={(e) => setNewCardLimit(maskCurrency(e.target.value))}
+                        placeholder="0,00"
+                        className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5 text-right font-medium"
                         required
                       />
                     </div>
@@ -1239,10 +1252,9 @@ export default function App() {
                           <div>
                             <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Valor</label>
                             <input 
-                              type="number" 
-                              step="0.01"
+                              type="text" 
                               value={transAmount}
-                              onChange={(e) => setTransAmount(e.target.value)}
+                              onChange={(e) => setTransAmount(maskCurrency(e.target.value))}
                               placeholder="0,00"
                               className={`w-full bg-transparent border-none rounded-none py-2 px-0 outline-none focus:ring-0 placeholder:text-stone-300 text-lg font-medium transition-all ${transType === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}
                               required
