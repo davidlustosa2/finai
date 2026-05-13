@@ -225,5 +225,23 @@ export const firestoreService = {
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
+  },
+
+  async updateCard(id: string, data: any) {
+    const path = `cards/${id}`;
+    try {
+      await updateDoc(doc(db, 'cards', id), cleanData(data));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  },
+
+  async deleteCard(id: string) {
+    const path = `cards/${id}`;
+    try {
+      await deleteDoc(doc(db, 'cards', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
   }
 };

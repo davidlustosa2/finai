@@ -3,6 +3,7 @@ import { useAuth } from './contexts/AuthContext';
 import { firestoreService } from './lib/firestoreService';
 import { createRecurringOrInstallments } from './lib/transactionUtils';
 import { 
+  Search,
   LayoutDashboard, 
   PlusCircle, 
   Wallet, 
@@ -12,7 +13,6 @@ import {
   MessageSquare,
   ArrowUpRight,
   ArrowDownLeft,
-  Search,
   Bell,
   Sparkles,
   ChevronRight,
@@ -88,13 +88,62 @@ interface Summary {
 }
 
 interface CardData {
-  id: number;
+  id: string | number;
   name: string;
   limit: number;
   used: number;
-  closingDate: string;
-  dueDate: string;
+  closingDate?: string;
+  dueDate?: string;
+  type: 'credit' | 'bank';
+  brand?: string;
+  bankLogo?: string;
 }
+
+const CARD_BRANDS = [
+  { id: 'visa', name: 'Visa', logo: 'visa.com' },
+  { id: 'mastercard', name: 'Mastercard', logo: 'mastercard.com' },
+  { id: 'elo', name: 'Elo', logo: 'elo.com.br' },
+  { id: 'amex', name: 'American Express', logo: 'amex.com' },
+  { id: 'hipercard', name: 'Hipercard', logo: 'hipercard.com.br' },
+  { id: 'diners', name: 'Diners Club', logo: 'dinersclub.com' },
+];
+
+const BRAZILIAN_BANKS = [
+  { id: 'itau', name: 'Itaú Unibanco', logo: 'itau.com.br' },
+  { id: 'bb', name: 'Banco do Brasil', logo: 'bb.com.br' },
+  { id: 'bradesco', name: 'Bradesco', logo: 'bradesco.com.br' },
+  { id: 'caixa', name: 'Caixa Econômica', logo: 'caixa.gov.br' },
+  { id: 'santander', name: 'Santander', logo: 'santander.com.br' },
+  { id: 'nubank', name: 'Nubank', logo: 'nubank.com.br' },
+  { id: 'inter', name: 'Banco Inter', logo: 'bancointer.com.br' },
+  { id: 'c6', name: 'C6 Bank', logo: 'c6bank.com.br' },
+  { id: 'btg', name: 'BTG Pactual', logo: 'btgpactual.com.br' },
+  { id: 'xp', name: 'XP Investimentos', logo: 'xp.com.br' },
+  { id: 'safra', name: 'Banco Safra', logo: 'safra.com.br' },
+  { id: 'pan', name: 'Banco Pan', logo: 'bancopan.com.br' },
+  { id: 'bmg', name: 'Banco BMG', logo: 'bancobmg.com.br' },
+  { id: 'neon', name: 'Neon', logo: 'neon.com.br' },
+  { id: 'pagbank', name: 'PagBank', logo: 'pagbank.com.br' },
+  { id: 'mercadopago', name: 'Mercado Pago', logo: 'mercadopago.com.br' },
+  { id: 'picpay', name: 'PicPay', logo: 'picpay.com.br' },
+  { id: 'digio', name: 'Digio', logo: 'digio.com.br' },
+  { id: 'original', name: 'Banco Original', logo: 'original.com.br' },
+  { id: 'sicredi', name: 'Sicredi', logo: 'sicredi.com.br' },
+  { id: 'sicoob', name: 'Sicoob', logo: 'sicoob.com.br' },
+  { id: 'banrisul', name: 'Banrisul', logo: 'banrisul.com.br' },
+  { id: 'modal', name: 'Banco Modal', logo: 'modal.com.br' },
+  { id: 'agibank', name: 'Agibank', logo: 'agibank.com.br' },
+  { id: 'daycoval', name: 'Banco Daycoval', logo: 'daycoval.com.br' },
+  { id: 'cora', name: 'Cora', logo: 'cora.com.br' },
+  { id: 'stone', name: 'Stone', logo: 'stone.com.br' },
+  { id: 'votorantim', name: 'Banco BV', logo: 'bv.com.br' },
+  { id: 'will', name: 'Will Bank', logo: 'willbank.com.br' },
+  { id: 'bnb', name: 'Banco do Nordeste', logo: 'bnb.gov.br' },
+  { id: 'basa', name: 'Banco da Amazônia', logo: 'bancodaamazonia.com.br' },
+  { id: 'efi', name: 'Efí (Gerencianet)', logo: 'sejaefi.com.br' },
+  { id: 'creditas', name: 'Creditas', logo: 'creditas.com' },
+  { id: 'outro', name: 'Outro Banco', logo: '' }
+];
 
 interface Insight {
   title: string;
@@ -164,10 +213,15 @@ export default function App() {
 
   // Form states for new card
   const [showNewCardForm, setShowNewCardForm] = useState(false);
+  const [editingCard, setEditingCard] = useState<CardData | null>(null);
   const [newCardName, setNewCardName] = useState('');
+  const [newCardType, setNewCardType] = useState<'credit' | 'bank'>('credit');
   const [newCardLimit, setNewCardLimit] = useState('');
   const [newCardClosing, setNewCardClosing] = useState('');
   const [newCardDue, setNewCardDue] = useState('');
+  const [newCardBrand, setNewCardBrand] = useState('visa');
+  const [newCardBank, setNewCardBank] = useState('itau');
+  const [bankSearch, setBankSearch] = useState('');
 
   // Form states for new transaction
   const [showNewTransactionForm, setShowNewTransactionForm] = useState(false);
@@ -204,6 +258,9 @@ export default function App() {
   const [manualCategoryName, setManualCategoryName] = useState('');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
+  
+  const [showCardDeleteModal, setShowCardDeleteModal] = useState(false);
+  const [cardToDelete, setCardToDelete] = useState<CardData | null>(null);
   
   const [showQuitarWarning, setShowQuitarWarning] = useState(false);
   const [transactionToQuitar, setTransactionToQuitar] = useState<Transaction | null>(null);
@@ -375,6 +432,29 @@ export default function App() {
   const currentBalance = metrics.income - metrics.expenses;
   const realizedBalance = metrics.realizedIncome - metrics.realizedExpenses;
 
+  const computedCards = React.useMemo(() => {
+    return cards.map(card => {
+      const cardTransactions = transactions.filter(t => t.account === card.name);
+      
+      const totalIncome = cardTransactions
+        .filter(t => t.type === 'income')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+        
+      const totalExpense = cardTransactions
+        .filter(t => t.type === 'expense')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+      
+      // Both bank and credit use the same logic for "Available Value"
+      // Balance/Available = Initial/Limit + Income - Expense
+      const computedValue = (Number(card.limit) || 0) + totalIncome - totalExpense;
+      
+      return {
+        ...card,
+        used: computedValue
+      };
+    });
+  }, [cards, transactions]);
+
   const fetchData = async () => {
     if (!user) return;
     try {
@@ -386,13 +466,17 @@ export default function App() {
       ]);
       
       // Calculate summary on frontend as we've moved to direct Firebase integration
+      const totalInitialBalance = (cardsData as CardData[])
+        .filter(c => c.type === 'bank')
+        .reduce((acc, c) => acc + (Number(c.limit) || 0), 0);
+
       const totalIncome = (transactionsData as any[]).filter(t => t.type === 'income').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
       const totalExpense = (transactionsData as any[]).filter(t => t.type === 'expense').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
-      const balance = totalIncome - totalExpense;
+      const balance = totalInitialBalance + totalIncome - totalExpense;
 
       const totalRealizedIncome = (transactionsData as any[]).filter(t => t.type === 'income').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
       const totalRealizedExpense = (transactionsData as any[]).filter(t => t.type === 'expense').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
-      const realizedBalance = totalRealizedIncome - totalRealizedExpense;
+      const realizedBalance = totalInitialBalance + totalRealizedIncome - totalRealizedExpense;
 
       const summaryData: Summary = {
         balance,
@@ -401,10 +485,10 @@ export default function App() {
         realizedBalance,
         realizedIncome: totalRealizedIncome,
         realizedExpense: totalRealizedExpense,
-        accounts: accountsData.length > 0 ? accountsData : [
-          { id: '1', name: 'Conta Corrente', balance: 4500.00, type: 'checking' },
-          { id: '2', name: 'Reserva', balance: 12000.00, type: 'savings' },
-        ],
+        accounts: (cardsData as CardData[]).filter(c => c.type === 'bank').map(c => ({
+          ...c,
+          balance: (Number(c.limit) || 0) // We'll compute the real balance in computedCards, but summary can have the initial
+        })),
         cards: cardsData,
         categories: categoriesData.length > 0 ? (categoriesData as any[]) : [
           { name: 'Alimentação', type: 'expense' },
@@ -466,37 +550,130 @@ export default function App() {
     }).format(cents / 100);
   };
 
+  const getAutoLogo = (name: string) => {
+    const lowercaseName = name.toLowerCase();
+    const bank = BRAZILIAN_BANKS.find(b => 
+      (b.id !== 'outro' && lowercaseName.includes(b.id.toLowerCase())) || 
+      (b.name !== 'Outro Banco' && lowercaseName.includes(b.name.toLowerCase()))
+    );
+    return bank?.logo;
+  };
+
+  const getCardLogoUrl = (domain: string) => {
+    if (!domain) return '';
+    if (domain.startsWith('http')) return domain;
+    return `https://logo.clearbit.com/${domain}`;
+  };
+
+  const handleLogoError = (e: React.SyntheticEvent<HTMLImageElement, Event>, domain: string) => {
+    const target = e.target as HTMLImageElement;
+    // If Clearbit fails, try Google as secondary
+    if (target.src.includes('clearbit.com')) {
+      target.src = `https://www.google.com/s2/favicons?sz=128&domain=${domain}`;
+    }
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const bankDropdown = document.getElementById('bank-dropdown-list');
+      const brandDropdown = document.getElementById('brand-dropdown-list');
+      
+      if (bankDropdown && !bankDropdown.contains(event.target as Node) && !bankDropdown.previousElementSibling?.contains(event.target as Node)) {
+        bankDropdown.classList.add('hidden');
+      }
+      
+      if (brandDropdown && !brandDropdown.contains(event.target as Node) && !brandDropdown.previousElementSibling?.contains(event.target as Node)) {
+        brandDropdown.classList.add('hidden');
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const parseCurrency = (formattedValue: string) => {
     return (parseInt(formattedValue.replace(/\D/g, ''), 10) || 0) / 100;
   };
 
-  const handleCreateCard = async (e: React.FormEvent) => {
+  const resetCardForm = () => {
+    setEditingCard(null);
+    setNewCardName('');
+    setNewCardType('credit');
+    setNewCardLimit('');
+    setNewCardClosing('');
+    setNewCardDue('');
+    setNewCardBrand('visa');
+    setNewCardBank('itau');
+  };
+
+  const handleSaveCard = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      await firestoreService.addCard({
+        const cardData = {
         name: newCardName,
+        type: newCardType,
         limit: parseCurrency(newCardLimit),
-        used: 0,
-        closingDate: newCardClosing,
-        dueDate: newCardDue
-      });
+        closingDate: newCardType === 'credit' ? newCardClosing : undefined,
+        dueDate: newCardType === 'credit' ? newCardDue : undefined,
+        brand: newCardType === 'credit' ? newCardBrand : undefined,
+        bankLogo: newCardType === 'bank' ? BRAZILIAN_BANKS.find(b => b.id === newCardBank)?.logo : undefined,
+        bankId: newCardType === 'bank' ? newCardBank : undefined
+      };
+
+      if (editingCard) {
+        await firestoreService.updateCard(editingCard.id.toString(), cardData);
+        setSuccessMessage("Atualizado com sucesso!");
+      } else {
+        await firestoreService.addCard({ ...cardData, used: 0 });
+        setSuccessMessage("Salvo com sucesso!");
+      }
 
       setShowNewCardForm(false);
-      setNewCardName('');
-      setNewCardLimit('');
-      setNewCardClosing('');
-      setNewCardDue('');
+      resetCardForm();
       fetchData();
-      setSuccessMessage("Cartão adicionado com sucesso!");
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (e: any) {
       console.error(e);
-      setErrorMessage("Erro ao criar cartão. Verifique sua conexão.");
+      setErrorMessage("Erro ao salvar card/conta.");
       setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleEditCardClick = (card: CardData) => {
+    setEditingCard(card);
+    setNewCardName(card.name);
+    setNewCardType(card.type);
+    setNewCardLimit(maskCurrency((card.limit * 100).toFixed(0)));
+    setNewCardClosing(card.closingDate || '');
+    setNewCardDue(card.dueDate || '');
+    setNewCardBrand(card.brand || 'visa');
+    setNewCardBank((card as any).bankId || 'itau');
+    setShowNewCardForm(true);
+  };
+
+  const handleDeleteCard = async (id: string) => {
+    setIsSubmitting(true);
+    try {
+      await firestoreService.deleteCard(id);
+      setShowCardDeleteModal(false);
+      setCardToDelete(null);
+      fetchData();
+      setSuccessMessage("Removido com sucesso!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (e) {
+      console.error(e);
+      setErrorMessage("Erro ao remover.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const confirmDeleteCard = (card: CardData) => {
+    setCardToDelete(card);
+    setShowCardDeleteModal(true);
   };
 
   const handleCreateTransaction = async (e: React.FormEvent) => {
@@ -1166,12 +1343,36 @@ export default function App() {
                       .map((t) => (
                       <div key={t.id} className={`flex items-center justify-between p-2 hover:bg-stone-50 rounded-2xl transition-all ${t.settled ? 'opacity-40 grayscale-[0.2]' : ''}`}>
                         <div className="flex items-center gap-4">
-                          <div className={`p-3 rounded-2xl ${t.type === 'income' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'} ${t.settled ? 'bg-stone-100 text-stone-400' : ''}`}>
-                            {t.type === 'income' ? <ArrowUpRight size={20} /> : <ArrowDownLeft size={20} />}
+                          <div className={`p-1 w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border border-stone-100 bg-white shadow-sm overflow-hidden ${t.settled ? 'opacity-50' : ''}`}>
+                            {(() => {
+                              const card = cards.find(c => c.name === t.account);
+                              if (card) {
+                                const domain = card.type === 'bank' 
+                                  ? (card.bankLogo || getAutoLogo(card.name))
+                                  : (CARD_BRANDS.find(b => b.id === card.brand)?.logo || card.bankLogo || getAutoLogo(card.name));
+                                  
+                                if (domain) {
+                                  return (
+                                    <img 
+                                      src={getCardLogoUrl(domain)} 
+                                      alt="" 
+                                      className="w-6 h-6 object-contain" 
+                                      referrerPolicy="no-referrer" 
+                                      onError={(e) => handleLogoError(e, domain)}
+                                    />
+                                  );
+                                }
+                              }
+                              return t.type === 'income' ? <ArrowUpRight size={20} className="text-emerald-600" /> : <ArrowDownLeft size={20} className="text-rose-600" />;
+                            })()}
                           </div>
                           <div>
                             <p className={`font-medium ${t.settled ? 'line-through text-stone-400' : ''}`}>{t.description}</p>
-                            <p className="text-xs text-stone-400 uppercase tracking-wider">{t.category} • {t.account}</p>
+                            <p className="text-[10px] text-stone-400 uppercase tracking-widest font-bold">
+                              <span className="text-stone-300">{t.category}</span>
+                              <span className="mx-1 text-stone-200">/</span>
+                              <span className="text-stone-500">{t.account}</span>
+                            </p>
                           </div>
                         </div>
                         <div className="text-right">
@@ -1200,19 +1401,34 @@ export default function App() {
                     <PlusCircle size={18} className="text-stone-400 cursor-pointer" />
                   </div>
                   <div className="space-y-4">
-                    {summary?.accounts.map((acc: any) => (
-                      <div key={acc.id} className="flex items-center justify-between">
+                    {computedCards.filter(c => c.type === 'bank').map((acc: any) => (
+                      <div key={acc.id} className="flex items-center justify-between group">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-stone-100 rounded-xl flex items-center justify-center text-stone-600">
-                            <Wallet size={18} />
+                          <div className="w-10 h-10 bg-white border border-stone-100 rounded-xl flex items-center justify-center shadow-sm overflow-hidden transition-transform group-hover:scale-110">
+                            {(() => {
+                              const domain = acc.bankLogo || acc.logo || getAutoLogo(acc.name);
+                                
+                              if (domain) {
+                                return (
+                                  <img 
+                                    src={getCardLogoUrl(domain)} 
+                                    alt="" 
+                                    className="w-6 h-6 object-contain" 
+                                    referrerPolicy="no-referrer" 
+                                    onError={(e) => handleLogoError(e, domain)}
+                                  />
+                                );
+                              }
+                              return <Wallet size={18} className="text-stone-300" />;
+                            })()}
                           </div>
                           <div>
-                            <p className="text-sm font-medium">{acc.name}</p>
-                            <p className="text-xs text-stone-400 uppercase tracking-wider">{acc.type === 'checking' ? 'Corrente' : 'Investimento'}</p>
+                            <p className="text-sm font-bold text-stone-800">{acc.name}</p>
+                            <p className="text-[9px] text-stone-400 uppercase tracking-[0.1em] font-bold">Conta Corrente</p>
                           </div>
                         </div>
-                        <p className="font-semibold text-sm">
-                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.balance)}
+                        <p className="font-bold text-sm text-stone-900 tracking-tight">
+                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.used)}
                         </p>
                       </div>
                     ))}
@@ -1319,36 +1535,255 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="space-y-6"
+              className="space-y-12"
             >
               <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-semibold tracking-tight">Cartões de Crédito</h2>
+                <h2 className="text-2xl font-semibold tracking-tight">Cartões e Contas</h2>
                 <button 
                   onClick={() => setShowNewCardForm(true)}
                   className="bg-stone-900 text-white px-6 py-2 rounded-2xl text-sm font-medium hover:bg-stone-800 transition-all hover:scale-105 hover:shadow-xl hover:shadow-stone-200 active:scale-95 flex items-center gap-2 group"
                 >
                   <PlusCircle size={18} className="group-hover:rotate-90 transition-transform" />
-                  Novo Cartão
+                  Novo
                 </button>
               </div>
 
               {showNewCardForm && (
                 <Card className="max-w-md mx-auto">
-                  <h3 className="font-semibold mb-4">Adicionar Novo Cartão</h3>
-                  <form onSubmit={handleCreateCard} className="space-y-4">
+                  <h3 className="font-semibold mb-4">{editingCard ? 'Editar' : 'Adicionar Novo'}</h3>
+                  <form onSubmit={handleSaveCard} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-2 p-1 bg-stone-100 rounded-2xl mb-4">
+                      <button
+                        type="button"
+                        onClick={() => setNewCardType('credit')}
+                        className={`py-2 text-xs font-bold rounded-xl transition-all ${newCardType === 'credit' ? 'bg-white shadow-sm text-stone-900' : 'text-stone-400 hover:text-stone-600'}`}
+                      >
+                        Cartão de Crédito
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewCardType('bank')}
+                        className={`py-2 text-xs font-bold rounded-xl transition-all ${newCardType === 'bank' ? 'bg-white shadow-sm text-stone-900' : 'text-stone-400 hover:text-stone-600'}`}
+                      >
+                        Conta Bancária
+                      </button>
+                    </div>
+
                     <div>
-                      <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Nome do Cartão</label>
+                      <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Nome Identificador</label>
                       <input 
                         type="text" 
                         value={newCardName}
                         onChange={(e) => setNewCardName(e.target.value)}
-                        placeholder="Ex: Nubank Ultravioleta"
+                        placeholder={newCardType === 'credit' ? "Ex: Nubank Ultravioleta" : "Ex: Itaú Personalité"}
                         className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
                         required
                       />
                     </div>
+
+                    {newCardType === 'credit' && (
+                      <div className="relative group/brand-dropdown">
+                        <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Bandeira</label>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = document.getElementById('brand-dropdown-list');
+                              if (el) el.classList.toggle('hidden');
+                            }}
+                            className="w-full bg-stone-50 border border-black/5 rounded-xl py-2.5 px-4 outline-none focus:ring-2 ring-stone-900/5 text-left flex items-center justify-between group"
+                          >
+                            <div className="flex items-center gap-3">
+                              {(() => {
+                                const brand = CARD_BRANDS.find(b => b.id === newCardBrand);
+                                if (brand?.logo) {
+                                  return (
+                                    <img 
+                                      src={getCardLogoUrl(brand.logo)} 
+                                      alt="" 
+                                      className="w-5 h-6 object-contain"
+                                      referrerPolicy="no-referrer"
+                                      onError={(e) => handleLogoError(e, brand.logo)}
+                                    />
+                                  );
+                                }
+                                return (
+                                  <div className="w-5 h-5 bg-stone-200 rounded flex items-center justify-center text-stone-500">
+                                    <CreditCard size={12} />
+                                  </div>
+                                );
+                              })()}
+                              <span className="text-sm font-medium text-stone-900">
+                                {CARD_BRANDS.find(b => b.id === newCardBrand)?.name || 'Selecionar Bandeira'}
+                              </span>
+                            </div>
+                            <ChevronRight size={16} className="text-stone-400 group-hover:translate-x-0.5 transition-transform rotate-90" />
+                          </button>
+
+                          <div 
+                            id="brand-dropdown-list"
+                            className="hidden absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-[60] overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
+                          >
+                            <div className="p-3 border-b border-stone-100">
+                              <div className="relative">
+                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                                <input 
+                                  type="text"
+                                  value={bankSearch}
+                                  onChange={(e) => setBankSearch(e.target.value)}
+                                  placeholder="Pesquisar bandeira..."
+                                  className="w-full bg-stone-50/50 border border-stone-100 rounded-xl py-2 pl-9 pr-4 text-xs outline-none focus:ring-2 ring-stone-900/5"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                            </div>
+                            
+                            <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                              {CARD_BRANDS
+                                .filter(brand => brand.name.toLowerCase().includes(bankSearch.toLowerCase()))
+                                .map(brand => (
+                                <button
+                                  key={brand.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setNewCardBrand(brand.id);
+                                    document.getElementById('brand-dropdown-list')?.classList.add('hidden');
+                                  }}
+                                  className={`w-full p-2.5 flex items-center gap-3 transition-all hover:bg-stone-50 ${newCardBrand === brand.id ? 'bg-stone-50/80' : ''}`}
+                                >
+                                  <div className="w-6 h-6 flex items-center justify-center bg-white rounded-lg border border-stone-100 shadow-sm overflow-hidden shrink-0">
+                                    {brand.logo ? (
+                                      <img 
+                                        src={getCardLogoUrl(brand.logo)} 
+                                        alt={brand.name} 
+                                        className="w-4 h-4 object-contain" 
+                                        referrerPolicy="no-referrer"
+                                        onError={(e) => handleLogoError(e, brand.logo)}
+                                      />
+                                    ) : (
+                                      <CreditCard size={12} className="text-stone-400" />
+                                    )}
+                                  </div>
+                                  <span className="text-xs font-medium text-stone-700">{brand.name}</span>
+                                  {newCardBrand === brand.id && (
+                                    <div className="ml-auto w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                                  )}
+                                </button>
+                              ))}
+                              {CARD_BRANDS.filter(brand => brand.name.toLowerCase().includes(bankSearch.toLowerCase())).length === 0 && (
+                                <p className="text-center py-6 text-xs text-stone-400 italic">Nenhuma bandeira encontrada</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {newCardType === 'bank' && (
+                      <div className="relative group/dropdown">
+                        <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Banco</label>
+                        
+                        {/* Custom Searchable Dropdown */}
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = document.getElementById('bank-dropdown-list');
+                              if (el) el.classList.toggle('hidden');
+                              setBankSearch('');
+                            }}
+                            className="w-full bg-stone-50 border border-black/5 rounded-xl py-2.5 px-4 outline-none focus:ring-2 ring-stone-900/5 text-left flex items-center justify-between group"
+                          >
+                            <div className="flex items-center gap-3">
+                              {(() => {
+                                const bank = BRAZILIAN_BANKS.find(b => b.id === newCardBank);
+                                if (bank?.logo) {
+                                  return (
+                                    <img 
+                                      src={getCardLogoUrl(bank.logo)} 
+                                      alt="" 
+                                      className="w-5 h-5 object-contain"
+                                      referrerPolicy="no-referrer"
+                                      onError={(e) => handleLogoError(e, bank.logo)}
+                                    />
+                                  );
+                                }
+                                return (
+                                  <div className="w-5 h-5 bg-stone-200 rounded flex items-center justify-center text-stone-500">
+                                    <Wallet size={12} />
+                                  </div>
+                                );
+                              })()}
+                              <span className="text-sm font-medium text-stone-900">
+                                {BRAZILIAN_BANKS.find(b => b.id === newCardBank)?.name || 'Selecionar Banco'}
+                              </span>
+                            </div>
+                            <ChevronRight size={16} className="text-stone-400 group-hover:translate-x-0.5 transition-transform rotate-90" />
+                          </button>
+
+                          <div 
+                            id="bank-dropdown-list"
+                            className="hidden absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-[60] overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
+                          >
+                            <div className="p-3 border-b border-stone-100">
+                              <div className="relative">
+                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                                <input 
+                                  type="text" 
+                                  value={bankSearch}
+                                  onChange={(e) => setBankSearch(e.target.value)}
+                                  placeholder="Pesquisar banco..."
+                                  className="w-full bg-stone-50/50 border border-stone-100 rounded-xl py-2 pl-9 pr-4 text-xs outline-none focus:ring-2 ring-stone-900/5"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                            </div>
+                            
+                            <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                              {BRAZILIAN_BANKS
+                                .filter(bank => bank.name.toLowerCase().includes(bankSearch.toLowerCase()))
+                                .map(bank => (
+                                  <button
+                                    key={bank.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setNewCardBank(bank.id);
+                                      document.getElementById('bank-dropdown-list')?.classList.add('hidden');
+                                      setBankSearch('');
+                                    }}
+                                    className={`w-full p-2.5 flex items-center gap-3 transition-all hover:bg-stone-50 ${newCardBank === bank.id ? 'bg-stone-50/80' : ''}`}
+                                  >
+                                    <div className="w-6 h-6 flex items-center justify-center bg-white rounded-lg border border-stone-100 shadow-sm overflow-hidden shrink-0">
+                                      {bank.logo ? (
+                                        <img 
+                                          src={getCardLogoUrl(bank.logo)} 
+                                          alt={bank.name} 
+                                          className="w-4 h-4 object-contain" 
+                                          referrerPolicy="no-referrer"
+                                          onError={(e) => handleLogoError(e, bank.logo)}
+                                        />
+                                      ) : (
+                                        <Wallet size={12} className="text-stone-400" />
+                                      )}
+                                    </div>
+                                    <span className="text-xs font-medium text-stone-700">{bank.name}</span>
+                                    {newCardBank === bank.id && (
+                                      <div className="ml-auto w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                                    )}
+                                  </button>
+                                ))}
+                              {BRAZILIAN_BANKS.filter(bank => bank.name.toLowerCase().includes(bankSearch.toLowerCase())).length === 0 && (
+                                <p className="text-center py-6 text-xs text-stone-400 italic">Nenhum banco encontrado</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div>
-                      <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Limite Total</label>
+                      <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">
+                        {newCardType === 'credit' ? 'Limite Total' : 'Saldo Atual'}
+                      </label>
                       <input 
                         type="text" 
                         value={newCardLimit}
@@ -1358,34 +1793,38 @@ export default function App() {
                         required
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Fechamento (Dia)</label>
-                        <input 
-                          type="number" 
-                          value={newCardClosing}
-                          onChange={(e) => setNewCardClosing(e.target.value)}
-                          placeholder="Ex: 25"
-                          className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
-                          required
-                        />
+                    
+                    {newCardType === 'credit' && (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Fechamento (Dia)</label>
+                          <input 
+                            type="number" 
+                            value={newCardClosing}
+                            onChange={(e) => setNewCardClosing(e.target.value)}
+                            placeholder="Ex: 25"
+                            className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Vencimento (Dia)</label>
+                          <input 
+                            type="number" 
+                            value={newCardDue}
+                            onChange={(e) => setNewCardDue(e.target.value)}
+                            placeholder="Ex: 01"
+                            className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
+                            required
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Vencimento (Dia)</label>
-                        <input 
-                          type="number" 
-                          value={newCardDue}
-                          onChange={(e) => setNewCardDue(e.target.value)}
-                          placeholder="Ex: 01"
-                          className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
-                          required
-                        />
-                      </div>
-                    </div>
+                    )}
+                    
                     <div className="flex gap-3 pt-2">
                       <button 
                         type="button" 
-                        onClick={() => setShowNewCardForm(false)}
+                        onClick={() => { setShowNewCardForm(false); resetCardForm(); }}
                         className="flex-1 px-4 py-2 border border-black/5 rounded-xl text-sm font-medium hover:bg-stone-50 hover:shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
                       >
                         Cancelar
@@ -1396,64 +1835,143 @@ export default function App() {
                         className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 hover:shadow-lg hover:shadow-stone-200 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                       >
                         {isSubmitting && <Loader2 size={16} className="animate-spin" />}
-                        {isSubmitting ? 'Salvando...' : 'Salvar'}
+                        {isSubmitting ? 'Salvando...' : (editingCard ? 'Atualizar' : 'Salvar')}
                       </button>
                     </div>
                   </form>
                 </Card>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {cards.map((card) => (
-                  <Card key={card.id} className="relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
-                      <CreditCard size={80} />
-                    </div>
-                    <div className="relative z-10">
-                      <div className="flex justify-between items-start mb-6">
-                        <div>
-                          <p className="text-xs font-medium text-stone-500 uppercase tracking-widest mb-1">Cartão de Crédito</p>
-                          <h3 className="text-xl font-semibold">{card.name}</h3>
+              {/* Contas Correntes */}
+              <div className="space-y-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-1.5 h-6 bg-emerald-500 rounded-full" />
+                  <h3 className="text-xl font-bold text-stone-900 tracking-tight">Contas Correntes</h3>
+                  <div className="h-px flex-1 bg-stone-100" />
+                  <span className="text-[10px] font-black text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">
+                    {computedCards.filter(c => c.type === 'bank').length}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {computedCards.filter(c => c.type === 'bank').map((card) => (
+                    <motion.div 
+                      layout
+                      key={card.id} 
+                      className="group bg-white rounded-3xl border border-stone-100 p-5 hover:shadow-xl hover:shadow-stone-200/50 transition-all duration-300"
+                    >
+                      <div className="flex justify-between items-start mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-stone-50 rounded-xl flex items-center justify-center border border-stone-100 shadow-sm overflow-hidden group-hover:scale-110 transition-transform">
+                            {(() => {
+                              const logoDomain = card.bankLogo || getAutoLogo(card.name) || '';
+                              if (logoDomain) {
+                                return (
+                                  <img 
+                                    src={getCardLogoUrl(logoDomain)} 
+                                    alt="" 
+                                    className="w-7 h-7 object-contain" 
+                                    referrerPolicy="no-referrer"
+                                    onError={(e) => handleLogoError(e, logoDomain)}
+                                  />
+                                );
+                              }
+                              return <Wallet size={18} className="text-stone-300" />;
+                            })()}
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-stone-900 truncate max-w-[140px] text-sm">{card.name}</h4>
+                            <p className="text-[10px] text-stone-400 font-bold uppercase tracking-widest">Saldo Disponível</p>
+                          </div>
                         </div>
-                        <div className="p-2 bg-stone-100 rounded-xl">
-                          <CreditCard size={20} className="text-stone-600" />
-                        </div>
-                      </div>
-
-                      <div className="space-y-4">
-                        <div>
-                          <div className="flex justify-between text-sm mb-2">
-                            <span className="text-stone-500">Limite Utilizado</span>
-                            <span className="font-semibold">
-                              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(card.used)}
-                            </span>
-                          </div>
-                          <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
-                            <div 
-                              className={`h-full rounded-full transition-all ${card.used / card.limit > 0.8 ? 'bg-rose-500' : 'bg-stone-900'}`}
-                              style={{ width: `${Math.min((card.used / card.limit) * 100, 100)}%` }} 
-                            />
-                          </div>
-                          <div className="flex justify-between text-[10px] text-stone-400 mt-1 uppercase tracking-wider">
-                            <span>Disponível: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(card.limit - card.used)}</span>
-                            <span>Total: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(card.limit)}</span>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4 pt-2">
-                          <div className="bg-stone-50 p-3 rounded-2xl">
-                            <p className="text-[10px] text-stone-400 uppercase tracking-widest mb-1">Fechamento</p>
-                            <p className="text-sm font-medium">Dia {card.closingDate}</p>
-                          </div>
-                          <div className="bg-stone-50 p-3 rounded-2xl">
-                            <p className="text-[10px] text-stone-400 uppercase tracking-widest mb-1">Vencimento</p>
-                            <p className="text-sm font-medium">Dia {card.dueDate}</p>
-                          </div>
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => handleEditCardClick(card)} className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-50 rounded-lg"><Edit2 size={12} /></button>
+                          <button onClick={() => confirmDeleteCard(card)} className="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={12} /></button>
                         </div>
                       </div>
-                    </div>
-                  </Card>
-                ))}
+                      <div className="flex flex-col">
+                        <p className="text-xl font-black text-stone-900 tracking-tighter">
+                          <span className="text-xs font-medium mr-1 text-stone-400">R$</span>
+                          {card.used.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </p>
+                        <div className="mt-3 w-full bg-emerald-500/20 h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-rose-500 rounded-full transition-all duration-500" 
+                            style={{ width: `${Math.max(0, Math.min(100 - (card.used / (card.limit || 1)) * 100, 100))}%` }} 
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Cartões de Crédito */}
+              <div className="space-y-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-1.5 h-6 bg-rose-500 rounded-full" />
+                  <h3 className="text-xl font-bold text-stone-900 tracking-tight">Cartões de Crédito</h3>
+                  <div className="h-px flex-1 bg-stone-100" />
+                  <span className="text-[10px] font-black text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">
+                    {computedCards.filter(c => c.type === 'credit').length}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {computedCards.filter(c => c.type === 'credit').map((card) => (
+                    <motion.div 
+                      layout
+                      key={card.id} 
+                      className="group bg-white rounded-3xl border border-stone-100 p-5 hover:shadow-xl hover:shadow-stone-200/50 transition-all duration-300"
+                    >
+                      <div className="flex justify-between items-start mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-stone-50 rounded-xl flex items-center justify-center border border-stone-100 shadow-sm overflow-hidden group-hover:scale-110 transition-transform">
+                            {(() => {
+                              const logoDomain = CARD_BRANDS.find(b => b.id === card.brand)?.logo || card.bankLogo || getAutoLogo(card.name) || '';
+                              if (logoDomain) {
+                                return (
+                                  <img 
+                                    src={getCardLogoUrl(logoDomain)} 
+                                    alt="" 
+                                    className="w-7 h-7 object-contain" 
+                                    referrerPolicy="no-referrer"
+                                    onError={(e) => handleLogoError(e, logoDomain)}
+                                  />
+                                );
+                              }
+                              return <CreditCard size={18} className="text-stone-300" />;
+                            })()}
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-stone-900 truncate max-w-[140px] text-sm">{card.name}</h4>
+                            <div className="flex gap-2">
+                              <span className="text-[8px] font-black text-stone-400 bg-stone-100 px-1 py-0.5 rounded uppercase">F. {card.closingDate}</span>
+                              <span className="text-[8px] font-black text-rose-500 bg-rose-50 px-1 py-0.5 rounded uppercase font-bold">V. {card.dueDate}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => handleEditCardClick(card)} className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-50 rounded-lg"><Edit2 size={12} /></button>
+                          <button onClick={() => confirmDeleteCard(card)} className="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={12} /></button>
+                        </div>
+                      </div>
+                      <div className="flex flex-col">
+                        <div className="flex justify-between items-end">
+                          <p className="text-xl font-black text-stone-900 tracking-tighter">
+                            <span className="text-xs font-medium mr-1 text-stone-400">R$</span>
+                            {card.used.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </p>
+                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Limite Disponível</p>
+                        </div>
+                        <div className="mt-3 w-full bg-emerald-500/20 h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-rose-500 rounded-full transition-all duration-500" 
+                            style={{ width: `${Math.max(0, Math.min(100 - (card.used / (card.limit || 1)) * 100, 100))}%` }} 
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
               </div>
             </motion.div>
           )}
@@ -2734,6 +3252,49 @@ export default function App() {
                       </button>
                     </div>
                   )}
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {showCardDeleteModal && cardToDelete && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md"
+              onClick={(e) => e.target === e.currentTarget && setShowCardDeleteModal(false)}
+            >
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5"
+              >
+                <div className="p-8 text-center">
+                  <div className="w-16 h-16 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                    <Trash2 size={32} />
+                  </div>
+                  <h3 className="text-xl font-bold text-stone-900 tracking-tight">Excluir {cardToDelete.type === 'bank' ? 'Conta' : 'Cartão'}?</h3>
+                  <p className="text-sm text-stone-500 mt-2 leading-relaxed">
+                    Você está prestes a excluir <span className="font-semibold text-stone-900">"{cardToDelete.name}"</span>. Esta ação removerá o acesso a este recurso mas <span className="italic">não</span> excluirá os lançamentos vinculados a ele.
+                  </p>
+
+                  <div className="mt-8 grid grid-cols-2 gap-3">
+                    <button 
+                      onClick={() => setShowCardDeleteModal(false)}
+                      className="w-full py-4 bg-white border border-stone-200 text-stone-900 rounded-2xl text-sm font-bold hover:bg-stone-50 transition-all active:scale-95"
+                    >
+                      Cancelar
+                    </button>
+                    <button 
+                      onClick={() => handleDeleteCard(cardToDelete.id.toString())}
+                      disabled={isSubmitting}
+                      className="w-full py-4 bg-rose-600 text-white rounded-2xl text-sm font-bold hover:bg-rose-700 transition-all shadow-xl shadow-rose-200 active:scale-95 disabled:opacity-50"
+                    >
+                      {isSubmitting ? <Loader2 size={18} className="animate-spin mx-auto" /> : 'Confirmar'}
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             </motion.div>

@@ -1,8 +1,105 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(resourceData) {
+      return isSignedIn() && resourceData.uid == request.auth.uid;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Validation patterns
+    function isValidTransaction(data) {
+      return data.uid == request.auth.uid &&
+             data.type in ['income', 'expense'] &&
+             data.amount is number && data.amount >= 0 &&
+             data.description is string && data.description.size() <= 500 &&
+             data.category is string &&
+             data.date is string;
+    }
+
+    function isValidCard(data) {
+      return data.uid == request.auth.uid &&
+             data.name is string && data.name.size() <= 100 &&
+             data.type in ['credit', 'bank'] &&
+             data.limit is number &&
+             data.used is number &&
+             (data.type == 'bank' || (data.closingDate is string && data.dueDate is string)) &&
+             (!data.keys().hasAll(['brand']) || (data.brand is string && data.brand.size() <= 50)) &&
+             (!data.keys().hasAll(['bankId']) || (data.bankId is string && data.bankId.size() <= 50)) &&
+             (!data.keys().hasAll(['bankLogo']) || (data.bankLogo is string && data.bankLogo.size() <= 500));
+    }
+
+    function isValidCategory(data) {
+      return data.uid == request.auth.uid &&
+             data.name is string && data.name.size() <= 50 &&
+             data.type in ['income', 'expense'];
+    }
+
+    function isValidAccount(data) {
+      return data.uid == request.auth.uid &&
+             data.name is string && data.name.size() <= 100 &&
+             data.balance is number;
+    }
+
+    // Default deny
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if false;
+    }
+
+    match /transactions/{transactionId} {
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow get: if isOwner(resource.data);
+      allow create: if isSignedIn() && isValidTransaction(incoming());
+      allow update: if isOwner(resource.data) && isValidTransaction(incoming()) && (
+        incoming().uid == existing().uid &&
+        (incoming().createdAt == existing().createdAt || !existing().keys().hasAll(['createdAt']))
+      );
+      allow delete: if isOwner(resource.data);
+    }
+
+    match /cards/{cardId} {
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow get: if isOwner(resource.data);
+      allow create: if isSignedIn() && isValidCard(incoming());
+      allow update: if isOwner(resource.data) && isValidCard(incoming()) && (
+        incoming().uid == existing().uid
+      );
+      allow delete: if isOwner(resource.data);
+    }
+
+    match /categories/{categoryId} {
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow get: if isOwner(resource.data);
+      allow create: if isSignedIn() && isValidCategory(incoming());
+      allow update: if isOwner(resource.data) && isValidCategory(incoming()) && (
+        incoming().uid == existing().uid
+      );
+      allow delete: if isOwner(resource.data);
+    }
+
+    match /accounts/{accountId} {
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow get: if isOwner(resource.data);
+      allow create: if isSignedIn() && isValidAccount(incoming());
+      allow update: if isOwner(resource.data) && isValidAccount(incoming()) && (
+        incoming().uid == existing().uid
+      );
+      allow delete: if isOwner(resource.data);
     }
   }
 }

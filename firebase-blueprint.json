@@ -48,18 +48,22 @@
       "required": ["uid", "name", "balance"]
     },
     "Card": {
-      "title": "Card",
-      "description": "Credit card",
+      "title": "Card/Account",
+      "description": "Credit card or Bank Account",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "description": "Owner user ID" },
-        "name": { "type": "string", "description": "Card name" },
-        "limit": { "type": "number", "description": "Credit limit" },
-        "used": { "type": "number", "description": "Used amount" },
-        "closingDate": { "type": "string", "description": "Invoice closing date" },
-        "dueDate": { "type": "string", "description": "Invoice due date" }
+        "name": { "type": "string", "description": "Name of the card or account" },
+        "type": { "type": "string", "enum": ["credit", "bank"], "description": "Type: credit card or bank account" },
+        "limit": { "type": "number", "description": "Credit limit or overdraft limit" },
+        "used": { "type": "number", "description": "Used amount or current balance" },
+        "closingDate": { "type": "string", "description": "Invoice closing date (for credit cards)" },
+        "dueDate": { "type": "string", "description": "Invoice due date (for credit cards)" },
+        "brand": { "type": "string", "description": "Card brand (visa, mastercard, etc)" },
+        "bankId": { "type": "string", "description": "Selected bank ID" },
+        "bankLogo": { "type": "string", "description": "Selected bank logo URL" }
       },
-      "required": ["uid", "name", "limit", "used"]
+      "required": ["uid", "name", "limit", "used", "type"]
     },
     "Category": {
       "title": "Category",
