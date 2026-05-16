@@ -1,7 +1,8 @@
-export const addDate = (d: Date, idx: number, freq: 'monthly' | 'weekly' | 'none') => {
+export const addDate = (d: Date, idx: number, freq: 'monthly' | 'weekly' | 'annually' | 'none') => {
   const newD = new Date(d);
   if (freq === 'monthly') newD.setMonth(newD.getMonth() + idx);
   if (freq === 'weekly') newD.setDate(newD.getDate() + idx * 7);
+  if (freq === 'annually') newD.setFullYear(newD.getFullYear() + idx);
   return newD.toISOString();
 };
 
@@ -26,7 +27,10 @@ export const createRecurringOrInstallments = (baseData: any) => {
       });
     }
   } else if (isRecurring) {
-    const count = frequency === 'weekly' ? 52 : 12;
+    let count = 12;
+    if (frequency === 'weekly') count = 52;
+    if (frequency === 'annually') count = 10; // 10 years for annual
+    
     const recurringGroup = Date.now();
     for (let i = 0; i < count; i++) {
       newTransactions.push({

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { firestoreService } from './lib/firestoreService';
 import { createRecurringOrInstallments } from './lib/transactionUtils';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { 
   Search,
   LayoutDashboard, 
@@ -23,6 +24,8 @@ import {
   X,
   Repeat,
   Plus,
+  Square,
+  CheckSquare,
   Settings,
   CheckCircle2,
   AlertCircle,
@@ -31,10 +34,13 @@ import {
   ArrowUpDown,
   Filter,
   ChevronDown,
+  ChevronUp,
   LogOut,
   Loader2,
   Download,
-  FileDown
+  FileDown,
+  GripVertical,
+  Landmark
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
@@ -71,7 +77,10 @@ interface Transaction {
   account: string;
   isRecurringEntry?: boolean;
   recurringGroup?: number;
+  recurringFrequency?: 'monthly' | 'weekly' | 'annually';
   installmentGroup?: number;
+  installmentSequence?: number;
+  totalInstallments?: number;
   settled?: boolean;
 }
 
@@ -97,6 +106,7 @@ interface CardData {
   type: 'credit' | 'bank';
   brand?: string;
   bankLogo?: string;
+  overdraftLimit?: number;
 }
 
 const CARD_BRANDS = [
@@ -159,7 +169,7 @@ const Card = ({ children, className = "" }: { children: React.ReactNode, classNa
   </div>
 );
 
-const StatCard = ({ title, value, realizedValue, icon: Icon, color }: any) => (
+const StatCard = ({ title, value, realizedValue, icon: Icon, color, tooltip }: any) => (
   <Card className="flex flex-col gap-3 group hover:shadow-lg transition-all duration-300">
     <div className="flex justify-between items-start">
       <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">{title}</span>
@@ -196,15 +206,29 @@ const StatCard = ({ title, value, realizedValue, icon: Icon, color }: any) => (
   </Card>
 );
 
+const DEFAULT_CATEGORIES = [
+  { name: 'Alimentação', type: 'expense', sortOrder: 0 },
+  { name: 'Salário', type: 'income', sortOrder: 1 },
+  { name: 'Lazer', type: 'expense', sortOrder: 2 },
+  { name: 'Moradia', type: 'expense', sortOrder: 3 },
+  { name: 'Transporte', type: 'expense', sortOrder: 4 },
+  { name: 'Saúde', type: 'expense', sortOrder: 5 },
+  { name: 'Educação', type: 'expense', sortOrder: 6 },
+  { name: 'Mercado', type: 'expense', sortOrder: 7 },
+  { name: 'Assinaturas', type: 'expense', sortOrder: 8 },
+  { name: 'Vendas', type: 'income', sortOrder: 9 },
+  { name: 'Investimentos', type: 'income', sortOrder: 10 }
+];
+
 export default function App() {
-  const { user, loading: authLoading, signInWithGoogle, logout } = useAuth();
+  const { user, loading: authLoading, signInWithGoogle, logout, connectionError } = useAuth();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [cards, setCards] = useState<CardData[]>([]);
   const [insights, setInsights] = useState<Insight[]>([]);
   const lastInsightRef = React.useRef<number>(0);
   const [insightError, setInsightError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState('transactions');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [showAllMonths, setShowAllMonths] = useState(false);
   const [showMonthMenu, setShowMonthMenu] = useState(false);
   const [aiInput, setAiInput] = useState('');
@@ -221,6 +245,7 @@ export default function App() {
   const [newCardDue, setNewCardDue] = useState('');
   const [newCardBrand, setNewCardBrand] = useState('visa');
   const [newCardBank, setNewCardBank] = useState('itau');
+  const [newCardOverdraft, setNewCardOverdraft] = useState('');
   const [bankSearch, setBankSearch] = useState('');
 
   // Form states for new transaction
@@ -230,13 +255,13 @@ export default function App() {
   const [transAmount, setTransAmount] = useState('');
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
   const [transCategory, setTransCategory] = useState('');
-  const [transAccount, setTransAccount] = useState('Conta Corrente');
+  const [transAccount, setTransAccount] = useState('');
   const [transDate, setTransDate] = useState(new Date().toISOString().split('T')[0]);
   const [transPayments, setTransPayments] = useState<{ amount: string, date: string }[]>([{ amount: '', date: new Date().toISOString().split('T')[0] }]);
   const [showRealizedFields, setShowRealizedFields] = useState(false);
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurrenceMode, setRecurrenceMode] = useState<'continuous' | 'installments'>('continuous');
-  const [transFrequency, setTransFrequency] = useState<'monthly' | 'weekly'>('monthly');
+  const [transFrequency, setTransFrequency] = useState<'monthly' | 'weekly' | 'annually'>('monthly');
   const [installmentsCount, setInstallmentsCount] = useState('3');
   const [categorySearch, setCategorySearch] = useState('');
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
@@ -247,6 +272,7 @@ export default function App() {
   const [newCategoryNameInModal, setNewCategoryNameInModal] = useState('');
   const [addingCategoryType, setAddingCategoryType] = useState<'income' | 'expense' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -264,8 +290,16 @@ export default function App() {
   const [showCardDeleteModal, setShowCardDeleteModal] = useState(false);
   const [cardToDelete, setCardToDelete] = useState<CardData | null>(null);
   
+  const [showCategoryDeleteModal, setShowCategoryDeleteModal] = useState(false);
+  const [categoryToDelete, setCategoryToDelete] = useState<{name: string, type: 'income' | 'expense'} | null>(null);
+  const [isCategoryInUse, setIsCategoryInUse] = useState(false);
+  
   const [showQuitarWarning, setShowQuitarWarning] = useState(false);
   const [transactionToQuitar, setTransactionToQuitar] = useState<Transaction | null>(null);
+
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [selectedTransactions, setSelectedTransactions] = useState<string[]>([]);
+  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
 
   // New filtering states
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
@@ -334,6 +368,74 @@ export default function App() {
     return 'normal';
   };
 
+  const handleToggleSelect = (id: string) => {
+    setSelectedTransactions(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAll = (visibleIds: string[]) => {
+    const uniqueVisibleIds = Array.from(new Set(visibleIds));
+    if (uniqueVisibleIds.every(id => selectedTransactions.includes(id))) {
+      setSelectedTransactions(prev => prev.filter(id => !uniqueVisibleIds.includes(id)));
+    } else {
+      const newSelection = Array.from(new Set([...selectedTransactions, ...uniqueVisibleIds]));
+      setSelectedTransactions(newSelection);
+    }
+  };
+
+  const handleBulkQuitar = async () => {
+    if (selectedTransactions.length === 0 || !user) return;
+    setIsBulkSubmitting(true);
+    try {
+      for (const id of selectedTransactions) {
+        const t = transactions.find(trans => trans.id.toString() === id);
+        if (t && !t.settled) {
+          const payload = {
+            ...t,
+            settled: true,
+            payments: [{ amount: t.amount, date: new Date().toISOString().split('T')[0] }]
+          };
+          const { id: _, ...updateData } = payload;
+          await firestoreService.updateTransaction(id, updateData);
+        }
+      }
+      setSuccessMessage(`${selectedTransactions.length} lançamentos quitados com sucesso!`);
+      setSelectedTransactions([]);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      setErrorMessage("Erro ao quitar em lote.");
+    } finally {
+      setIsBulkSubmitting(false);
+    }
+  };
+
+  const handleBulkDeleteRequest = () => {
+    if (selectedTransactions.length > 0) {
+      setShowBulkDeleteModal(true);
+    }
+  };
+
+  const confirmBulkDelete = async () => {
+    if (selectedTransactions.length === 0) return;
+    
+    setIsBulkSubmitting(true);
+    try {
+      await Promise.all(selectedTransactions.map(id => firestoreService.deleteTransaction(id)));
+      
+      setSuccessMessage(`${selectedTransactions.length} lançamentos excluídos com sucesso!`);
+      setSelectedTransactions([]);
+      setShowBulkDeleteModal(false);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      setErrorMessage("Erro ao excluir em lote.");
+    } finally {
+      setIsBulkSubmitting(false);
+    }
+  };
+
   const calculateRealizedAmount = (t: Transaction) => {
     if (t.payments && t.payments.length > 0) {
       return t.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
@@ -350,6 +452,12 @@ export default function App() {
       const matchesMonth = showAllMonths || !!filterText || (d.getMonth() === selectedMonth && d.getFullYear() === selectedYear);
       const matchesText = !filterText || (() => {
         const search = filterText.toLowerCase();
+        
+        // Special search term for orphaned transactions
+        if (search === 'órfão' || search === 'orfao') {
+          return !cards.some(c => (c.name || '').toLowerCase().trim() === (t.account || '').toLowerCase().trim());
+        }
+
         const transDate = new Date(t.date);
         const formattedDate = transDate.toLocaleDateString('pt-BR');
         const amountStr = t.amount.toString();
@@ -436,7 +544,9 @@ export default function App() {
 
   const computedCards = React.useMemo(() => {
     return cards.map(card => {
-      const cardTransactions = transactions.filter(t => t.account === card.name);
+      const cardTransactions = transactions.filter(t => 
+        (t.account || '').toLowerCase().trim() === (card.name || '').toLowerCase().trim()
+      );
       
       const totalIncome = cardTransactions
         .filter(t => t.type === 'income')
@@ -457,28 +567,67 @@ export default function App() {
     });
   }, [cards, transactions]);
 
+  // Check for transactions that don't belong to any known card/account
+  const orphanedTransactions = React.useMemo(() => {
+    return transactions.filter(t => 
+      !cards.some(c => (c.name || '').toLowerCase().trim() === (t.account || '').toLowerCase().trim())
+    );
+  }, [cards, transactions]);
+
   const fetchData = async () => {
     if (!user) return;
     try {
-      const [transactionsData, cardsData, accountsData, categoriesData] = await Promise.all([
-        firestoreService.getTransactions(),
-        firestoreService.getCards(),
-        firestoreService.getAccounts(),
-        firestoreService.getCategories()
+      const currentUid = user.uid;
+      console.log("Fetching data for UID:", currentUid);
+      const [transactionsData, cardsData, accountsRawData, categoriesData] = await Promise.all([
+        firestoreService.getTransactions(currentUid),
+        firestoreService.getCards(currentUid),
+        firestoreService.getAccounts(currentUid),
+        firestoreService.getCategories(currentUid)
       ]);
       
-      // Calculate summary on frontend as we've moved to direct Firebase integration
-      const totalInitialBalance = (cardsData as CardData[])
+      console.log("Fetched transactions count:", (transactionsData as any[])?.length || 0);
+      console.log("Fetched cards count:", (cardsData as any[])?.length || 0);
+      
+      const transactionsRaw = (transactionsData as any[]) || [];
+      const cardsRaw = (cardsData as any[]) || [];
+      const accountsRaw = (accountsRawData as any[]) || [];
+      const categoriesRaw = (categoriesData as any[]) || [];
+      
+      // Merge legacy 'accounts' collection items into cards if they aren't already there
+      const unifiedCards: CardData[] = [...cardsRaw];
+      accountsRaw.forEach(acc => {
+        if (!unifiedCards.find(c => c.id === acc.id)) {
+          unifiedCards.push({
+            ...acc,
+            type: acc.type || 'bank',
+            limit: acc.limit || acc.balance || 0
+          });
+        }
+      });
+
+      // Calculate summary on frontend
+      const totalInitialBalance = unifiedCards
         .filter(c => c.type === 'bank')
         .reduce((acc, c) => acc + (Number(c.limit) || 0), 0);
 
-      const totalIncome = (transactionsData as any[]).filter(t => t.type === 'income').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
-      const totalExpense = (transactionsData as any[]).filter(t => t.type === 'expense').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+      const totalIncome = transactionsRaw.filter(t => t.type === 'income').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+      const totalExpense = transactionsRaw.filter(t => t.type === 'expense').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
       const balance = totalInitialBalance + totalIncome - totalExpense;
 
-      const totalRealizedIncome = (transactionsData as any[]).filter(t => t.type === 'income').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
-      const totalRealizedExpense = (transactionsData as any[]).filter(t => t.type === 'expense').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
+      const totalRealizedIncome = transactionsRaw.filter(t => t.type === 'income').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
+      const totalRealizedExpense = transactionsRaw.filter(t => t.type === 'expense').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
       const realizedBalance = totalInitialBalance + totalRealizedIncome - totalRealizedExpense;
+
+      // Calculate categories: Use persistent if they exist, otherwise use defaults
+      const rawMergedCategories = categoriesRaw.length > 0 
+        ? [...categoriesRaw]
+        : [...DEFAULT_CATEGORIES];
+
+      // Deduplicate categories by name and type
+      const mergedCategories = Array.from(
+        new Map(rawMergedCategories.map(c => [`${c.type}-${c.name}`, c])).values()
+      ).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
 
       const summaryData: Summary = {
         balance,
@@ -487,38 +636,47 @@ export default function App() {
         realizedBalance,
         realizedIncome: totalRealizedIncome,
         realizedExpense: totalRealizedExpense,
-        accounts: (cardsData as CardData[]).filter(c => c.type === 'bank').map(c => ({
+        accounts: unifiedCards.filter(c => c.type === 'bank').map(c => ({
           ...c,
-          balance: (Number(c.limit) || 0) // We'll compute the real balance in computedCards, but summary can have the initial
+          balance: (Number(c.limit) || 0)
         })),
-        cards: cardsData,
-        categories: categoriesData.length > 0 ? (categoriesData as any[]) : [
-          { name: 'Alimentação', type: 'expense' },
-          { name: 'Salário', type: 'income' },
-          { name: 'Lazer', type: 'expense' },
-          { name: 'Moradia', type: 'expense' },
-          { name: 'Transporte', type: 'expense' },
-          { name: 'Saúde', type: 'expense' },
-          { name: 'Educação', type: 'expense' },
-          { name: 'Mercado', type: 'expense' },
-          { name: 'Assinaturas', type: 'expense' },
-          { name: 'Vendas', type: 'income' },
-          { name: 'Investimentos', type: 'income' }
-        ]
+        cards: unifiedCards,
+        categories: mergedCategories
       };
       
       setSummary(summaryData);
-      setTransactions(transactionsData as any[]);
-      setCards(cardsData as any[]);
+      
+      // Deduplicate transactions by ID
+      const uniqueTransactions = Array.from(
+        new Map(transactionsRaw.map(t => [t.id, t])).values()
+      ).sort((a: any, b: any) => {
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+      }) as Transaction[];
+      
+      setTransactions(uniqueTransactions);
+      setCards(unifiedCards);
+
+      // Reset filters if no data in current month but data exists elsewhere
+      if (uniqueTransactions.length > 0 && !showAllMonths) {
+        const hasDataInActiveMonth = uniqueTransactions.some(t => {
+          const d = new Date(t.date);
+          return d.getMonth() === selectedMonth && d.getFullYear() === selectedYear;
+        });
+        if (!hasDataInActiveMonth) {
+          setShowAllMonths(true);
+          setSuccessMessage("Mostrando dados de todos os períodos para ajudar a encontrar seus lançamentos.");
+          setTimeout(() => setSuccessMessage(null), 5000);
+        }
+      }
 
       // Generate insights
       const now = Date.now();
       if (now - lastInsightRef.current > 60000) {
         try {
           const insightData = await AIService.generateInsights({ 
-            transactions: transactionsData as any[], 
+            transactions: uniqueTransactions, 
             accounts: summaryData.accounts,
-            cards: cardsData as any[]
+            cards: unifiedCards
           });
           
           if (insightData.error === 'quota_exceeded') {
@@ -534,6 +692,7 @@ export default function App() {
       }
     } catch (e) {
       console.error(e);
+      setErrorMessage("Erro ao buscar dados do servidor. Verifique sua conexão.");
     }
   };
 
@@ -606,6 +765,7 @@ export default function App() {
     setNewCardDue('');
     setNewCardBrand('visa');
     setNewCardBank('itau');
+    setNewCardOverdraft('');
   };
 
   const handleSaveCard = async (e: React.FormEvent) => {
@@ -620,7 +780,8 @@ export default function App() {
         dueDate: newCardType === 'credit' ? newCardDue : undefined,
         brand: newCardType === 'credit' ? newCardBrand : undefined,
         bankLogo: newCardType === 'bank' ? BRAZILIAN_BANKS.find(b => b.id === newCardBank)?.logo : undefined,
-        bankId: newCardType === 'bank' ? newCardBank : undefined
+        bankId: newCardType === 'bank' ? newCardBank : undefined,
+        overdraftLimit: newCardType === 'bank' ? parseCurrency(newCardOverdraft) : undefined
       };
 
       if (editingCard) {
@@ -653,6 +814,7 @@ export default function App() {
     setNewCardDue(card.dueDate || '');
     setNewCardBrand(card.brand || 'visa');
     setNewCardBank((card as any).bankId || 'itau');
+    setNewCardOverdraft(card.overdraftLimit ? maskCurrency((card.overdraftLimit * 100).toFixed(0)) : '');
     setShowNewCardForm(true);
   };
 
@@ -699,12 +861,18 @@ export default function App() {
     const totalPayments = payments.reduce((acc, p) => acc + p.amount, 0);
     const plannedAmount = parseCurrency(transAmount);
 
+    if (!transAccount) {
+      setErrorMessage("Por favor, selecione uma conta ou cartão.");
+      setIsSubmitting(false);
+      return;
+    }
+
     const payload: any = {
       description: transDescription,
       amount: plannedAmount,
       type: transType,
       category: transCategory || 'Outros',
-      account: transAccount || 'Conta Corrente',
+      account: transAccount,
       date: new Date(transDate + 'T12:00:00').toISOString(),
       isRecurring: isRecurring && recurrenceMode === 'continuous',
       frequency: isRecurring && recurrenceMode === 'continuous' ? transFrequency : undefined,
@@ -718,7 +886,7 @@ export default function App() {
     try {
       if (editingTransaction) {
         const wasRecurring = !!(editingTransaction.recurringGroup || editingTransaction.installmentGroup);
-        const willBeRecurring = isRecurring && (recurrenceMode === 'continuous' || parseInt(installmentsCount) > 1);
+        const willBeRecurring = isRecurring && (recurrenceMode === 'continuous' || (recurrenceMode === 'installments' && parseInt(installmentsCount) > 1));
 
         if (willBeRecurring && !wasRecurring) {
           // Converting single to recurring/installments
@@ -729,8 +897,67 @@ export default function App() {
           for (const t of rest) {
             await firestoreService.addTransaction(t);
           }
+        } else if (wasRecurring) {
+          // If was recurring, we might need to update future ones
+          const groupId = editingTransaction.recurringGroup || editingTransaction.installmentGroup;
+          
+          // Find all future transactions in this group
+          const futureTrans = transactions.filter(t => {
+            const isSameGroup = (t.recurringGroup === groupId || t.installmentGroup === groupId);
+            const isFuture = new Date(t.date) > new Date(editingTransaction.date);
+            return isSameGroup && isFuture;
+          });
+
+          if (willBeRecurring) {
+            // Check if frequency or mode changed - if so, we definitely need to regenerate future ones
+            const hasFrequencyChanged = (editingTransaction.recurringFrequency !== transFrequency);
+            const hasRecurrenceModeChanged = ((editingTransaction.recurringGroup && recurrenceMode === 'installments') || (editingTransaction.installmentGroup && recurrenceMode === 'continuous'));
+            const hasInstallmentsCountChanged = (editingTransaction.totalInstallments?.toString() !== installmentsCount);
+
+            if (hasFrequencyChanged || hasRecurrenceModeChanged || hasInstallmentsCountChanged) {
+              // Frequência ou modo mudou: deletar futuros e regenerar
+              for (const t of futureTrans) {
+                await firestoreService.deleteTransaction(t.id.toString());
+              }
+              const newSeries = createRecurringOrInstallments({ ...payload, uid: user.uid });
+              const [first, ...rest] = newSeries;
+              
+              // Mantemos o mesmo ID do grupo para o primeiro (opcional, mas createRecurringOrInstallments gera um novo)
+              // Na verdade, createRecurringOrInstallments gera um novo timestamp, o que é ok pois estamos "reiniciando" a série
+              await firestoreService.updateTransaction(editingTransaction.id.toString(), first);
+              for (const t of rest) {
+                await firestoreService.addTransaction(t);
+              }
+            } else {
+              // Apenas campos informativos (descrição, valor, categoria, conta) mudaram
+              // Atualizar todos os futuros com os novos dados (exceto a data)
+              await firestoreService.updateTransaction(editingTransaction.id.toString(), payload);
+              for (const t of futureTrans) {
+                const updatedPayload = {
+                  ...payload,
+                  date: t.date // Preservar a data original do futuro
+                };
+                await firestoreService.updateTransaction(t.id.toString(), updatedPayload);
+              }
+            }
+          } else {
+            // Deixou de ser recorrente: deletar futuros e atualizar o atual como single
+            for (const t of futureTrans) {
+              await firestoreService.deleteTransaction(t.id.toString());
+            }
+            // Remover metadados de grupo do payload
+            const singlePayload = { ...payload };
+            delete singlePayload.recurringGroup;
+            delete singlePayload.recurringFrequency;
+            delete singlePayload.isRecurringEntry;
+            delete singlePayload.installmentGroup;
+            delete singlePayload.installmentSequence;
+            delete singlePayload.totalInstallments;
+            
+            await firestoreService.updateTransaction(editingTransaction.id.toString(), singlePayload);
+          }
         } else {
-          // Standard update (single to single, or updating one in a series)
+          // Standard update (single to single)
           await firestoreService.updateTransaction(editingTransaction.id.toString(), payload);
         }
       } else {
@@ -826,13 +1053,13 @@ export default function App() {
     setIsRecurring(!!(t.recurringGroup || t.installmentGroup));
     if (t.installmentGroup) {
       setRecurrenceMode('installments');
-      if ((t as any).totalInstallments) {
-        setInstallmentsCount((t as any).totalInstallments.toString());
+      if (t.totalInstallments) {
+        setInstallmentsCount(t.totalInstallments.toString());
       }
     } else if (t.recurringGroup) {
       setRecurrenceMode('continuous');
-      if ((t as any).recurringFrequency) {
-        setTransFrequency((t as any).recurringFrequency);
+      if (t.recurringFrequency) {
+        setTransFrequency(t.recurringFrequency);
       }
     }
     setShowNewTransactionForm(true);
@@ -845,7 +1072,7 @@ export default function App() {
     setTransAmount('');
     setTransType('expense');
     setTransCategory('');
-    setTransAccount('Conta Corrente');
+    setTransAccount('');
     setTransDate(new Date().toISOString().split('T')[0]);
     setTransPayments([{ amount: '', date: new Date().toISOString().split('T')[0] }]);
     setShowRealizedFields(false);
@@ -859,7 +1086,10 @@ export default function App() {
 
   const handleAddCategory = async (name: string) => {
     try {
-      await firestoreService.addCategory({ name, type: transType });
+      await ensureCategoriesSeeded(); // Keep existing ones as persistent
+      const latestCats = await firestoreService.getCategories(user?.uid) as any[];
+      const maxOrder = Math.max(0, ...latestCats.map(c => c.sortOrder || 0));
+      await firestoreService.addCategory({ name, type: transType, sortOrder: maxOrder + 1 });
       setTransCategory(name);
       setCategorySearch('');
       setShowCategoryDropdown(false);
@@ -869,42 +1099,173 @@ export default function App() {
     }
   };
 
+  const ensureCategoriesSeeded = async () => {
+    try {
+      const currentPersistent = await firestoreService.getCategories(user?.uid);
+      const persistentSet = new Set((currentPersistent as any[]).map(c => `${c.type}-${c.name}`));
+      
+      // We want to make sure EVERY default category is in Firestore
+      const toSeed = DEFAULT_CATEGORIES.filter(def => !persistentSet.has(`${def.type}-${def.name}`));
+      
+      if (toSeed.length > 0) {
+        await Promise.all(toSeed.map(async (c) => {
+          try {
+            await firestoreService.addCategory({ 
+              name: c.name, 
+              type: c.type, 
+              sortOrder: c.sortOrder || 0 
+            });
+          } catch (err) {
+            console.warn(`Failed to seed cat ${c.name}:`, err);
+          }
+        }));
+      }
+    } catch (e) {
+      console.error("Error in ensureCategoriesSeeded:", e);
+    }
+  };
+
   const handleAddCategoryModal = async (type: 'income' | 'expense') => {
     if (!manualCategoryName.trim()) return;
     try {
-      await firestoreService.addCategory({ name: manualCategoryName, type });
+      setLoading(true);
+      const currentCats = summary?.categories || [];
+      const exists = currentCats.some(c => c.name === manualCategoryName && c.type === type);
+      if (exists) {
+        setErrorMessage("Esta categoria já existe.");
+        return;
+      }
+
+      await ensureCategoriesSeeded();
+      const latestCats = summary?.categories || [];
+      const maxOrder = Math.max(0, ...latestCats.map(c => c.sortOrder || 0));
+      await firestoreService.addCategory({ name: manualCategoryName, type, sortOrder: maxOrder + 1 });
       setManualCategoryName('');
       setAddingCategoryType(null);
-      fetchData();
+      await fetchData();
     } catch (e) {
       console.error(e);
+      setErrorMessage("Erro ao adicionar categoria.");
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleUpdateCategory = async (type: string, oldName: string, newName: string) => {
+    if (!newName.trim() || oldName === newName) {
+      setEditingCategoryInModal(null);
+      return;
+    }
     try {
-      const cat = summary?.categories.find(c => c.name === oldName && c.type === type) as any;
+      setLoading(true);
+      await ensureCategoriesSeeded();
+      
+      const updatedCats = await firestoreService.getCategories(user?.uid) as any[];
+      const cat = updatedCats.find(c => c.name === oldName && c.type === type);
+      
       if (cat && cat.id) {
         await firestoreService.updateCategory(cat.id, { name: newName });
-        fetchData();
-        setEditingCategoryInModal(null);
-        setNewCategoryNameInModal('');
+        await fetchData();
       }
+      setEditingCategoryInModal(null);
+      setNewCategoryNameInModal('');
     } catch (e) {
       console.error(e);
+      setErrorMessage("Erro ao atualizar categoria.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleDeleteCategory = async (type: string, name: string) => {
-    if (!confirm('Deseja excluir esta categoria?')) return;
+  const handleDeleteCategory = (type: 'income' | 'expense', name: string) => {
+    const inUse = transactions.some(t => t.category === name && t.type === type);
+    setIsCategoryInUse(inUse);
+    setCategoryToDelete({ name, type });
+    setShowCategoryDeleteModal(true);
+  };
+
+  const confirmDeleteCategory = async () => {
+    if (!categoryToDelete) return;
+    const { type, name } = categoryToDelete;
+    
     try {
-      const cat = summary?.categories.find(c => c.name === name && c.type === type) as any;
+      setLoading(true);
+      setShowCategoryDeleteModal(false);
+      
+      const currentPersistent = await firestoreService.getCategories(user?.uid) as any[];
+      const cat = currentPersistent.find(c => c.name === name && c.type === type);
+      
       if (cat && cat.id) {
         await firestoreService.deleteCategory(cat.id);
-        fetchData();
+      } else {
+        await ensureCategoriesSeeded();
+        const updatedCats = await firestoreService.getCategories(user?.uid) as any[];
+        const persistentCat = updatedCats.find(c => c.name === name && c.type === type);
+        if (persistentCat && persistentCat.id) {
+          await firestoreService.deleteCategory(persistentCat.id);
+        }
       }
+      await fetchData();
+      setCategoryToDelete(null);
     } catch (e) {
       console.error(e);
+      setErrorMessage("Erro ao excluir categoria.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onDragEnd = async (result: DropResult, type: 'income' | 'expense') => {
+    if (!result.destination) return;
+    
+    const { source, destination } = result;
+    if (source.index === destination.index) return;
+
+    // Optimistic Update
+    if (!summary) return;
+    const currentCatsOfType = summary.categories.filter(c => c.type === type);
+    const otherCats = summary.categories.filter(c => c.type !== type);
+    
+    const updatedOfType = Array.from(currentCatsOfType);
+    const [removed] = updatedOfType.splice(source.index, 1);
+    updatedOfType.splice(destination.index, 0, removed);
+    
+    // Update local state immediately for snappy feel
+    const newSummary = {
+      ...summary,
+      categories: [...otherCats, ...updatedOfType].sort((a, b) => {
+        // We need to maintain some sort of relative order between types if we want consistency,
+        // but here we just want the UI to feel fast.
+        // Actually, just update the filtered list is enough for the modal view.
+        return 0; // The categories in summary are usually sorted by sortOrder in fetchData
+      })
+    };
+    
+    // Specifically for the modal display, we just need the filtered list to be correct
+    setSummary(newSummary);
+
+    try {
+      // Reorder in background
+      const refreshedPersistent = await firestoreService.getCategories(user?.uid) as any[];
+      const persistentOfType = refreshedPersistent
+        .filter(c => c.type === type)
+        .sort((a: any, b: any) => {
+          const indexA = updatedOfType.findIndex(o => (o as any).name === a.name);
+          const indexB = updatedOfType.findIndex(o => (o as any).name === b.name);
+          return indexA - indexB;
+        });
+
+      const batchItems = persistentOfType.map((cat, index) => ({
+        id: cat.id,
+        data: { sortOrder: index }
+      }));
+
+      if (batchItems.length > 0) {
+        await firestoreService.batchUpdateCategories(batchItems);
+      }
+    } catch (e) {
+      console.error("Reorder failed:", e);
+      // Rollback if needed, but usually not worth the complexity unless it fails often
     }
   };
   
@@ -941,7 +1302,7 @@ export default function App() {
           }]
         });
         fetchData();
-        setSuccessMessage("Lançamento quitado com sucesso!");
+        setSuccessMessage("Lançamento concluído com sucesso!");
         setTimeout(() => setSuccessMessage(null), 3000);
       } catch (e) {
         console.error(e);
@@ -961,7 +1322,7 @@ export default function App() {
           settled: true
         });
         fetchData();
-        setSuccessMessage("Lançamento quitado!");
+        setSuccessMessage("Lançamento concluído!");
         setTimeout(() => setSuccessMessage(null), 3000);
       } catch (e) {
         console.error(e);
@@ -982,7 +1343,7 @@ export default function App() {
       setShowQuitarWarning(false);
       setTransactionToQuitar(null);
       fetchData();
-      setSuccessMessage("Lançamento quitado (valor parcial).");
+      setSuccessMessage("Lançamento concluído (valor parcial).");
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (e) {
       console.error(e);
@@ -1062,18 +1423,17 @@ export default function App() {
       const updatedPayments = [...(settlingTransaction.payments || []), newPayment];
       const totalPaid = updatedPayments.reduce((sum, p) => sum + p.amount, 0);
       
-      // The user specified: "O adicionar pagamento não deve quitar automaticamente o lançamento, só registrar o novo pagamento."
-      // BUT if it reaches the total, should it settle?
-      // Actually, let's strictly follow: "não deve quitar automaticamente".
+      // Quando o valor de pagamentos é igual ou superior ao valor planejado, o sistema automaticamente faz a quitação
+      const shouldBeSettled = totalPaid >= settlingTransaction.amount;
       
       await firestoreService.updateTransaction(settlingTransaction.id.toString(), {
-        settled: false, // Explicitly false as per request
+        settled: shouldBeSettled,
         payments: updatedPayments
       });
       setShowSettleModal(false);
       setSettlingTransaction(null);
       fetchData();
-      setSuccessMessage("Pagamento adicionado!");
+      setSuccessMessage(shouldBeSettled ? "Lançamento quitado com sucesso!" : "Pagamento adicionado!");
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (e: any) {
       console.error(e);
@@ -1199,17 +1559,46 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F8F7F4] text-stone-900 font-sans selection:bg-emerald-100">
+      {/* Toast Notification Banner */}
+      <AnimatePresence>
+        {(successMessage || errorMessage) && (
+          <motion.div 
+            initial={{ y: -100, opacity: 0 }}
+            animate={{ y: 20, opacity: 1 }}
+            exit={{ y: -100, opacity: 0 }}
+            className="fixed top-0 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-6"
+          >
+            <div className={`p-4 rounded-3xl shadow-2xl flex items-center gap-3 border backdrop-blur-xl ${successMessage ? 'bg-emerald-500/90 border-emerald-400 text-white' : 'bg-rose-500/90 border-rose-400 text-white'}`}>
+              {successMessage ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
+              <p className="font-bold text-sm tracking-tight">{successMessage || errorMessage}</p>
+              <button 
+                onClick={() => { setSuccessMessage(null); setErrorMessage(null); }}
+                className="ml-auto p-1 hover:bg-white/20 rounded-full transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Sidebar / Nav */}
       <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur-xl border border-black/5 px-6 py-3 rounded-full shadow-2xl z-50 flex items-center gap-8">
-        <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'dashboard' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
+        <button onClick={() => setActiveTab('dashboard')} title="Painel de Controle" className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'dashboard' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
           <LayoutDashboard size={20} />
         </button>
-        <button onClick={() => setActiveTab('transactions')} className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'transactions' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
+        <button onClick={() => setActiveTab('transactions')} title="Lançamentos e Extrato" className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'transactions' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
           <BarChart3 size={20} />
         </button>
-        <button onClick={() => setActiveTab('cards')} className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'cards' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
+        <button onClick={() => setActiveTab('cards')} title="Contas e Cartões" className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'cards' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
           <CreditCard size={20} />
         </button>
+        <div className="h-4 w-px bg-black/5 mx-2" />
+        <div className="flex flex-col items-center">
+          <p className="text-[8px] font-black text-stone-300 uppercase tracking-tighter">Conta</p>
+          <p className="text-[10px] font-bold text-stone-500 max-w-[100px] truncate" title={user?.email || ''}>
+            {user?.email?.split('@')[0]}
+          </p>
+        </div>
         {/* Aba AI Desativada Temporariamente 
         <button onClick={() => setActiveTab('ai')} className={`p-2 rounded-full transition-colors ${activeTab === 'ai' ? 'bg-stone-900 text-white' : 'text-stone-400 hover:text-stone-600'}`}>
           <MessageSquare size={20} />
@@ -1276,12 +1665,13 @@ export default function App() {
                   setFilterText('');
                 }
               }}
+              title={isSearchOpen ? "Fechar Busca" : "Abrir Pesquisa"}
               className={`p-3 rounded-2xl border transition-all hover:scale-110 active:scale-95 ${isSearchOpen ? 'bg-stone-900 text-white border-stone-900 shadow-lg' : 'bg-white border-black/5 text-stone-500 hover:bg-stone-50 shadow-sm'}`}
             >
               <Search size={20} />
             </button>
           </div>
-          <button className="p-3 bg-white rounded-2xl border border-black/5 shadow-sm hover:bg-stone-50 hover:scale-110 hover:shadow-md active:scale-95 transition-all relative">
+          <button title="Notificações" className="p-3 bg-white rounded-2xl border border-black/5 shadow-sm hover:bg-stone-50 hover:scale-110 hover:shadow-md active:scale-95 transition-all relative">
             <Bell size={20} className="text-stone-500" />
             <span className="absolute top-3 right-3 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
           </button>
@@ -1289,6 +1679,21 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 pb-32">
+        {/* Global Connection/Config Error */}
+        {(connectionError || errorMessage) && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-8 p-4 bg-red-50 border border-red-200 rounded-3xl flex items-center gap-3 text-red-800"
+          >
+            <AlertCircle size={20} className="shrink-0" />
+            <div className="text-sm flex-1">
+              <p className="font-bold">Erro de Configuração</p>
+              <p className="text-xs opacity-90">{connectionError || errorMessage}</p>
+            </div>
+          </motion.div>
+        )}
+
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
             <motion.div 
@@ -1298,29 +1703,52 @@ export default function App() {
               exit={{ opacity: 0, y: -20 }}
               className="grid grid-cols-1 lg:grid-cols-3 gap-6"
             >
+              {/* Orphaned Transactions Alert */}
+              {orphanedTransactions.length > 0 && (
+                <div className="lg:col-span-2 p-4 bg-amber-50 border border-amber-200 rounded-3xl flex items-center gap-3 text-amber-800">
+                  <AlertCircle size={20} className="shrink-0" />
+                  <div className="text-sm">
+                    <p className="font-bold">Aviso: Lançamentos sem conta</p>
+                    <p className="text-[11px] opacity-80">
+                      Identificamos {orphanedTransactions.length} lançamentos vinculados a nomes de conta que não existem ou foram renomeados. 
+                      Isso pode afetar o cálculo dos saldos. Edite-os na aba de Lançamentos.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => { setActiveTab('transactions'); setFilterText('órfão'); }}
+                    className="ml-auto px-4 py-2 bg-amber-200/50 hover:bg-amber-200 rounded-xl text-xs font-bold transition-all"
+                  >
+                    Ver Lançamentos
+                  </button>
+                </div>
+              )}
+
               {/* Main Stats */}
               <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <StatCard 
-                  title="Saldo Total" 
-                  value={summary?.balance || 0} 
-                  realizedValue={summary?.realizedBalance}
-                  icon={Wallet} 
-                  color="bg-stone-900" 
-                />
-                <StatCard 
-                  title="Receitas" 
-                  value={summary?.income || 0} 
-                  realizedValue={summary?.realizedIncome}
-                  icon={ArrowUpRight} 
-                  color="bg-emerald-500" 
-                />
-                <StatCard 
-                  title="Despesas" 
-                  value={summary?.expense || 0} 
-                  realizedValue={summary?.realizedExpense}
-                  icon={ArrowDownLeft} 
-                  color="bg-rose-500" 
-                />
+        <StatCard 
+          title="Saldo Total" 
+          value={summary?.balance || 0} 
+          realizedValue={summary?.realizedBalance}
+          icon={Wallet} 
+          color="bg-stone-900" 
+          tooltip="Seu saldo total planejado (Soma de contas + limite de cartões + receitas - despesas)"
+        />
+        <StatCard 
+          title="Receitas" 
+          value={summary?.income || 0} 
+          realizedValue={summary?.realizedIncome}
+          icon={ArrowUpRight} 
+          color="bg-emerald-500" 
+          tooltip="Total de receitas previstas para o período selecionado"
+        />
+        <StatCard 
+          title="Despesas" 
+          value={summary?.expense || 0} 
+          realizedValue={summary?.realizedExpense}
+          icon={ArrowDownLeft} 
+          color="bg-rose-500" 
+          tooltip="Total de despesas previstas para o período selecionado"
+        />
                 
                 {/* Main Chart */}
                 <Card className="md:col-span-3 h-[400px]">
@@ -1425,34 +1853,42 @@ export default function App() {
                   </div>
                   <div className="space-y-4">
                     {computedCards.filter(c => c.type === 'bank').map((acc: any) => (
-                      <div key={acc.id} className="flex items-center justify-between group">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-white border border-stone-100 rounded-xl flex items-center justify-center shadow-sm overflow-hidden transition-transform group-hover:scale-110">
-                            {(() => {
-                              const domain = acc.bankLogo || acc.logo || getAutoLogo(acc.name);
-                                
-                              if (domain) {
-                                return (
-                                  <img 
-                                    src={getCardLogoUrl(domain)} 
-                                    alt="" 
-                                    className="w-6 h-6 object-contain" 
-                                    referrerPolicy="no-referrer" 
-                                    onError={(e) => handleLogoError(e, domain)}
-                                  />
-                                );
-                              }
-                              return <Wallet size={18} className="text-stone-300" />;
-                            })()}
+                      <div key={acc.id} className="group">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-white border border-stone-100 rounded-xl flex items-center justify-center shadow-sm overflow-hidden transition-transform group-hover:scale-110">
+                              {(() => {
+                                const domain = acc.bankLogo || acc.logo || getAutoLogo(acc.name);
+                                  
+                                if (domain) {
+                                  return (
+                                    <img 
+                                      src={getCardLogoUrl(domain)} 
+                                      alt="" 
+                                      className="w-6 h-6 object-contain" 
+                                      referrerPolicy="no-referrer" 
+                                      onError={(e) => handleLogoError(e, domain)}
+                                    />
+                                  );
+                                }
+                                return <Wallet size={18} className="text-stone-300" />;
+                              })()}
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-stone-800">{acc.name}</p>
+                              <p className="text-[9px] text-stone-400 uppercase tracking-[0.1em] font-bold">Conta Corrente</p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-sm font-bold text-stone-800">{acc.name}</p>
-                            <p className="text-[9px] text-stone-400 uppercase tracking-[0.1em] font-bold">Conta Corrente</p>
-                          </div>
+                          <p className="font-bold text-sm text-stone-900 tracking-tight" title="Saldo Atual">
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.used)}
+                          </p>
                         </div>
-                        <p className="font-bold text-sm text-stone-900 tracking-tight">
-                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.used)}
-                        </p>
+                        <div className="mt-2 w-full bg-emerald-500/10 h-1 rounded-full overflow-hidden border border-emerald-500/20" title="Uso do Saldo">
+                          <div 
+                            className="h-full bg-rose-500 rounded-full transition-all duration-500 shadow-[0_0_8px_rgba(244,63,94,0.3)]" 
+                            style={{ width: `${Math.max(0, Math.min(100 - (acc.used / (acc.limit || 1)) * 100, 100))}%` }} 
+                          />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1571,299 +2007,330 @@ export default function App() {
                 </button>
               </div>
 
-              {showNewCardForm && (
-                <Card className="max-w-md mx-auto">
-                  <h3 className="font-semibold mb-4">{editingCard ? 'Editar' : 'Adicionar Novo'}</h3>
-                  <form onSubmit={handleSaveCard} className="space-y-4">
-                    <div className="grid grid-cols-2 gap-2 p-1 bg-stone-100 rounded-2xl mb-4">
-                      <button
-                        type="button"
-                        onClick={() => setNewCardType('credit')}
-                        className={`py-2 text-xs font-bold rounded-xl transition-all ${newCardType === 'credit' ? 'bg-white shadow-sm text-stone-900' : 'text-stone-400 hover:text-stone-600'}`}
-                      >
-                        Cartão de Crédito
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setNewCardType('bank')}
-                        className={`py-2 text-xs font-bold rounded-xl transition-all ${newCardType === 'bank' ? 'bg-white shadow-sm text-stone-900' : 'text-stone-400 hover:text-stone-600'}`}
-                      >
-                        Conta Bancária
-                      </button>
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Nome Identificador</label>
-                      <input 
-                        type="text" 
-                        value={newCardName}
-                        onChange={(e) => setNewCardName(e.target.value)}
-                        placeholder={newCardType === 'credit' ? "Ex: Nubank Ultravioleta" : "Ex: Itaú Personalité"}
-                        className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
-                        required
-                      />
-                    </div>
-
-                    {newCardType === 'credit' && (
-                      <div className="relative group/brand-dropdown">
-                        <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Bandeira</label>
-                        <div className="relative">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const el = document.getElementById('brand-dropdown-list');
-                              if (el) el.classList.toggle('hidden');
-                            }}
-                            className="w-full bg-stone-50 border border-black/5 rounded-xl py-2.5 px-4 outline-none focus:ring-2 ring-stone-900/5 text-left flex items-center justify-between group"
-                          >
-                            <div className="flex items-center gap-3">
-                              {(() => {
-                                const brand = CARD_BRANDS.find(b => b.id === newCardBrand);
-                                if (brand?.logo) {
-                                  return (
-                                    <img 
-                                      src={getCardLogoUrl(brand.logo)} 
-                                      alt="" 
-                                      className="w-5 h-6 object-contain"
-                                      referrerPolicy="no-referrer"
-                                      onError={(e) => handleLogoError(e, brand.logo)}
-                                    />
-                                  );
-                                }
-                                return (
-                                  <div className="w-5 h-5 bg-stone-200 rounded flex items-center justify-center text-stone-500">
-                                    <CreditCard size={12} />
-                                  </div>
-                                );
-                              })()}
-                              <span className="text-sm font-medium text-stone-900">
-                                {CARD_BRANDS.find(b => b.id === newCardBrand)?.name || 'Selecionar Bandeira'}
-                              </span>
-                            </div>
-                            <ChevronRight size={16} className="text-stone-400 group-hover:translate-x-0.5 transition-transform rotate-90" />
+              <AnimatePresence>
+                {showNewCardForm && (
+                  <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      onClick={() => { setShowNewCardForm(false); resetCardForm(); }}
+                      className="absolute inset-0 bg-stone-900/40 backdrop-blur-sm"
+                    />
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                      className="relative w-full max-w-md"
+                    >
+                      <Card className="shadow-2xl border-stone-200">
+                        <div className="flex justify-between items-center mb-6">
+                          <h3 className="text-xl font-bold tracking-tight">{editingCard ? 'Editar' : 'Adicionar Novo'}</h3>
+                          <button onClick={() => { setShowNewCardForm(false); resetCardForm(); }} className="p-2 hover:bg-stone-100 rounded-full transition-colors">
+                            <X size={20} className="text-stone-400" />
                           </button>
-
-                          <div 
-                            id="brand-dropdown-list"
-                            className="hidden absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-[60] overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
-                          >
-                            <div className="p-3 border-b border-stone-100">
-                              <div className="relative">
-                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
-                                <input 
-                                  type="text"
-                                  value={bankSearch}
-                                  onChange={(e) => setBankSearch(e.target.value)}
-                                  placeholder="Pesquisar bandeira..."
-                                  className="w-full bg-stone-50/50 border border-stone-100 rounded-xl py-2 pl-9 pr-4 text-xs outline-none focus:ring-2 ring-stone-900/5"
-                                  onClick={(e) => e.stopPropagation()}
-                                />
-                              </div>
-                            </div>
-                            
-                            <div className="max-h-60 overflow-y-auto custom-scrollbar">
-                              {CARD_BRANDS
-                                .filter(brand => brand.name.toLowerCase().includes(bankSearch.toLowerCase()))
-                                .map(brand => (
-                                <button
-                                  key={brand.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setNewCardBrand(brand.id);
-                                    document.getElementById('brand-dropdown-list')?.classList.add('hidden');
-                                  }}
-                                  className={`w-full p-2.5 flex items-center gap-3 transition-all hover:bg-stone-50 ${newCardBrand === brand.id ? 'bg-stone-50/80' : ''}`}
-                                >
-                                  <div className="w-6 h-6 flex items-center justify-center bg-white rounded-lg border border-stone-100 shadow-sm overflow-hidden shrink-0">
-                                    {brand.logo ? (
-                                      <img 
-                                        src={getCardLogoUrl(brand.logo)} 
-                                        alt={brand.name} 
-                                        className="w-4 h-4 object-contain" 
-                                        referrerPolicy="no-referrer"
-                                        onError={(e) => handleLogoError(e, brand.logo)}
-                                      />
-                                    ) : (
-                                      <CreditCard size={12} className="text-stone-400" />
-                                    )}
-                                  </div>
-                                  <span className="text-xs font-medium text-stone-700">{brand.name}</span>
-                                  {newCardBrand === brand.id && (
-                                    <div className="ml-auto w-1.5 h-1.5 bg-emerald-500 rounded-full" />
-                                  )}
-                                </button>
-                              ))}
-                              {CARD_BRANDS.filter(brand => brand.name.toLowerCase().includes(bankSearch.toLowerCase())).length === 0 && (
-                                <p className="text-center py-6 text-xs text-stone-400 italic">Nenhuma bandeira encontrada</p>
-                              )}
-                            </div>
-                          </div>
                         </div>
-                      </div>
-                    )}
-                    {newCardType === 'bank' && (
-                      <div className="relative group/dropdown">
-                        <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Banco</label>
-                        
-                        {/* Custom Searchable Dropdown */}
-                        <div className="relative">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const el = document.getElementById('bank-dropdown-list');
-                              if (el) el.classList.toggle('hidden');
-                              setBankSearch('');
-                            }}
-                            className="w-full bg-stone-50 border border-black/5 rounded-xl py-2.5 px-4 outline-none focus:ring-2 ring-stone-900/5 text-left flex items-center justify-between group"
-                          >
-                            <div className="flex items-center gap-3">
-                              {(() => {
-                                const bank = BRAZILIAN_BANKS.find(b => b.id === newCardBank);
-                                if (bank?.logo) {
-                                  return (
-                                    <img 
-                                      src={getCardLogoUrl(bank.logo)} 
-                                      alt="" 
-                                      className="w-5 h-5 object-contain"
-                                      referrerPolicy="no-referrer"
-                                      onError={(e) => handleLogoError(e, bank.logo)}
-                                    />
-                                  );
-                                }
-                                return (
-                                  <div className="w-5 h-5 bg-stone-200 rounded flex items-center justify-center text-stone-500">
-                                    <Wallet size={12} />
-                                  </div>
-                                );
-                              })()}
-                              <span className="text-sm font-medium text-stone-900">
-                                {BRAZILIAN_BANKS.find(b => b.id === newCardBank)?.name || 'Selecionar Banco'}
-                              </span>
-                            </div>
-                            <ChevronRight size={16} className="text-stone-400 group-hover:translate-x-0.5 transition-transform rotate-90" />
-                          </button>
+                        <form onSubmit={handleSaveCard} className="space-y-4">
+                          <div className="grid grid-cols-2 gap-2 p-1.5 bg-stone-100 rounded-2xl mb-4">
+                            <button
+                              type="button"
+                              onClick={() => setNewCardType('credit')}
+                              className={`py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${newCardType === 'credit' ? 'bg-white shadow-sm text-stone-900' : 'text-stone-400 hover:text-stone-600'}`}
+                            >
+                              Cartão de Crédito
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setNewCardType('bank')}
+                              className={`py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${newCardType === 'bank' ? 'bg-white shadow-sm text-stone-900' : 'text-stone-400 hover:text-stone-600'}`}
+                            >
+                              Conta Bancária
+                            </button>
+                          </div>
 
-                          <div 
-                            id="bank-dropdown-list"
-                            className="hidden absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-[60] overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
-                          >
-                            <div className="p-3 border-b border-stone-100">
-                              <div className="relative">
-                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
-                                <input 
-                                  type="text" 
-                                  value={bankSearch}
-                                  onChange={(e) => setBankSearch(e.target.value)}
-                                  placeholder="Pesquisar banco..."
-                                  className="w-full bg-stone-50/50 border border-stone-100 rounded-xl py-2 pl-9 pr-4 text-xs outline-none focus:ring-2 ring-stone-900/5"
-                                  onClick={(e) => e.stopPropagation()}
-                                />
-                              </div>
+                          <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1 custom-scrollbar">
+                            <div>
+                              <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block mb-1.5">Nome Identificador</label>
+                              <input 
+                                type="text" 
+                                value={newCardName}
+                                onChange={(e) => setNewCardName(e.target.value)}
+                                placeholder={newCardType === 'credit' ? "Ex: Nubank Ultravioleta" : "Ex: Itaú Personalité"}
+                                className="w-full bg-stone-50 border border-stone-200 rounded-2xl py-3 px-4 outline-none focus:ring-2 ring-stone-900/5 font-medium"
+                                required
+                              />
                             </div>
-                            
-                            <div className="max-h-60 overflow-y-auto custom-scrollbar">
-                              {BRAZILIAN_BANKS
-                                .filter(bank => bank.name.toLowerCase().includes(bankSearch.toLowerCase()))
-                                .map(bank => (
+
+                            {newCardType === 'credit' && (
+                              <div className="relative group/brand-dropdown">
+                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block mb-1.5">Bandeira</label>
+                                <div className="relative">
                                   <button
-                                    key={bank.id}
                                     type="button"
                                     onClick={() => {
-                                      setNewCardBank(bank.id);
-                                      document.getElementById('bank-dropdown-list')?.classList.add('hidden');
+                                      const el = document.getElementById('brand-dropdown-list');
+                                      if (el) el.classList.toggle('hidden');
+                                    }}
+                                    className="w-full bg-stone-50 border border-stone-200 rounded-2xl py-3 px-4 outline-none focus:ring-2 ring-stone-900/5 text-left flex items-center justify-between group"
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      {(() => {
+                                        const brand = CARD_BRANDS.find(b => b.id === newCardBrand);
+                                        if (brand?.logo) {
+                                          return (
+                                            <img 
+                                              src={getCardLogoUrl(brand.logo)} 
+                                              alt="" 
+                                              className="w-5 h-6 object-contain"
+                                              referrerPolicy="no-referrer"
+                                              onError={(e) => handleLogoError(e, brand.logo)}
+                                            />
+                                          );
+                                        }
+                                        return (
+                                          <div className="w-5 h-5 bg-stone-200 rounded flex items-center justify-center text-stone-500">
+                                            <CreditCard size={12} />
+                                          </div>
+                                        );
+                                      })()}
+                                      <span className="text-sm font-medium text-stone-900">
+                                        {CARD_BRANDS.find(b => b.id === newCardBrand)?.name || 'Selecionar Bandeira'}
+                                      </span>
+                                    </div>
+                                    <ChevronDown size={16} className="text-stone-400 group-hover:translate-x-0.5 transition-transform" />
+                                  </button>
+
+                                  <div 
+                                    id="brand-dropdown-list"
+                                    className="hidden absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-[60] overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
+                                  >
+                                    <div className="p-3 border-b border-stone-100">
+                                      <div className="relative">
+                                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                                        <input 
+                                          type="text"
+                                          value={bankSearch}
+                                          onChange={(e) => setBankSearch(e.target.value)}
+                                          placeholder="Pesquisar bandeira..."
+                                          className="w-full bg-stone-50/50 border border-stone-100 rounded-xl py-2 pl-9 pr-4 text-xs outline-none focus:ring-2 ring-stone-900/5"
+                                          onClick={(e) => e.stopPropagation()}
+                                        />
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                                      {CARD_BRANDS
+                                        .filter(brand => brand.name.toLowerCase().includes(bankSearch.toLowerCase()))
+                                        .map(brand => (
+                                        <button
+                                          key={brand.id}
+                                          type="button"
+                                          onClick={() => {
+                                            setNewCardBrand(brand.id);
+                                            document.getElementById('brand-dropdown-list')?.classList.add('hidden');
+                                          }}
+                                          className={`w-full p-2.5 flex items-center gap-3 transition-all hover:bg-stone-50 ${newCardBrand === brand.id ? 'bg-stone-50/80' : ''}`}
+                                        >
+                                          <div className="w-6 h-6 flex items-center justify-center bg-white rounded-lg border border-stone-100 shadow-sm overflow-hidden shrink-0">
+                                            {brand.logo ? (
+                                              <img 
+                                                src={getCardLogoUrl(brand.logo)} 
+                                                alt={brand.name} 
+                                                className="w-4 h-4 object-contain" 
+                                                referrerPolicy="no-referrer"
+                                                onError={(e) => handleLogoError(e, brand.logo)}
+                                              />
+                                            ) : (
+                                              <CreditCard size={12} className="text-stone-400" />
+                                            )}
+                                          </div>
+                                          <span className="text-xs font-medium text-stone-700">{brand.name}</span>
+                                          {newCardBrand === brand.id && (
+                                            <div className="ml-auto w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                                          )}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {newCardType === 'bank' && (
+                              <div className="relative group/dropdown">
+                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block mb-1.5">Banco</label>
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const el = document.getElementById('bank-dropdown-list');
+                                      if (el) el.classList.toggle('hidden');
                                       setBankSearch('');
                                     }}
-                                    className={`w-full p-2.5 flex items-center gap-3 transition-all hover:bg-stone-50 ${newCardBank === bank.id ? 'bg-stone-50/80' : ''}`}
+                                    className="w-full bg-stone-50 border border-stone-200 rounded-2xl py-3 px-4 outline-none focus:ring-2 ring-stone-900/5 text-left flex items-center justify-between group"
                                   >
-                                    <div className="w-6 h-6 flex items-center justify-center bg-white rounded-lg border border-stone-100 shadow-sm overflow-hidden shrink-0">
-                                      {bank.logo ? (
-                                        <img 
-                                          src={getCardLogoUrl(bank.logo)} 
-                                          alt={bank.name} 
-                                          className="w-4 h-4 object-contain" 
-                                          referrerPolicy="no-referrer"
-                                          onError={(e) => handleLogoError(e, bank.logo)}
-                                        />
-                                      ) : (
-                                        <Wallet size={12} className="text-stone-400" />
-                                      )}
+                                    <div className="flex items-center gap-3">
+                                      {(() => {
+                                        const bank = BRAZILIAN_BANKS.find(b => b.id === newCardBank);
+                                        if (bank?.logo) {
+                                          return (
+                                            <img 
+                                              src={getCardLogoUrl(bank.logo)} 
+                                              alt="" 
+                                              className="w-5 h-5 object-contain"
+                                              referrerPolicy="no-referrer"
+                                              onError={(e) => handleLogoError(e, bank.logo)}
+                                            />
+                                          );
+                                        }
+                                        return (
+                                          <div className="w-5 h-5 bg-stone-200 rounded flex items-center justify-center text-stone-500">
+                                            <Wallet size={12} />
+                                          </div>
+                                        );
+                                      })()}
+                                      <span className="text-sm font-medium text-stone-900">
+                                        {BRAZILIAN_BANKS.find(b => b.id === newCardBank)?.name || 'Selecionar Banco'}
+                                      </span>
                                     </div>
-                                    <span className="text-xs font-medium text-stone-700">{bank.name}</span>
-                                    {newCardBank === bank.id && (
-                                      <div className="ml-auto w-1.5 h-1.5 bg-emerald-500 rounded-full" />
-                                    )}
+                                    <ChevronDown size={16} className="text-stone-400 group-hover:translate-x-0.5 transition-transform" />
                                   </button>
-                                ))}
-                              {BRAZILIAN_BANKS.filter(bank => bank.name.toLowerCase().includes(bankSearch.toLowerCase())).length === 0 && (
-                                <p className="text-center py-6 text-xs text-stone-400 italic">Nenhum banco encontrado</p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
 
-                    <div>
-                      <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">
-                        {newCardType === 'credit' ? 'Limite Total' : 'Saldo Atual'}
-                      </label>
-                      <input 
-                        type="text" 
-                        value={newCardLimit}
-                        onChange={(e) => setNewCardLimit(maskCurrency(e.target.value))}
-                        placeholder="0,00"
-                        className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5 text-right font-medium"
-                        required
-                      />
-                    </div>
-                    
-                    {newCardType === 'credit' && (
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Fechamento (Dia)</label>
-                          <input 
-                            type="number" 
-                            value={newCardClosing}
-                            onChange={(e) => setNewCardClosing(e.target.value)}
-                            placeholder="Ex: 25"
-                            className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-stone-500 uppercase tracking-wider block mb-1">Vencimento (Dia)</label>
-                          <input 
-                            type="number" 
-                            value={newCardDue}
-                            onChange={(e) => setNewCardDue(e.target.value)}
-                            placeholder="Ex: 01"
-                            className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5"
-                            required
-                          />
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div className="flex gap-3 pt-2">
-                      <button 
-                        type="button" 
-                        onClick={() => { setShowNewCardForm(false); resetCardForm(); }}
-                        className="flex-1 px-4 py-2 border border-black/5 rounded-xl text-sm font-medium hover:bg-stone-50 hover:shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
-                      >
-                        Cancelar
-                      </button>
-                      <button 
-                        type="submit" 
-                        disabled={isSubmitting}
-                        className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 hover:shadow-lg hover:shadow-stone-200 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                      >
-                        {isSubmitting && <Loader2 size={16} className="animate-spin" />}
-                        {isSubmitting ? 'Salvando...' : (editingCard ? 'Atualizar' : 'Salvar')}
-                      </button>
-                    </div>
-                  </form>
-                </Card>
-              )}
+                                  <div 
+                                    id="bank-dropdown-list"
+                                    className="hidden absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-[60] overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
+                                  >
+                                    <div className="p-3 border-b border-stone-100">
+                                      <div className="relative">
+                                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                                        <input 
+                                          type="text" 
+                                          value={bankSearch}
+                                          onChange={(e) => setBankSearch(e.target.value)}
+                                          placeholder="Pesquisar banco..."
+                                          className="w-full bg-stone-50/50 border border-stone-100 rounded-xl py-2 pl-9 pr-4 text-xs outline-none focus:ring-2 ring-stone-900/5"
+                                          onClick={(e) => e.stopPropagation()}
+                                        />
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                                      {BRAZILIAN_BANKS
+                                        .filter(bank => bank.name.toLowerCase().includes(bankSearch.toLowerCase()))
+                                        .map(bank => (
+                                          <button
+                                            key={bank.id}
+                                            type="button"
+                                            onClick={() => {
+                                              setNewCardBank(bank.id);
+                                              document.getElementById('bank-dropdown-list')?.classList.add('hidden');
+                                              setBankSearch('');
+                                            }}
+                                            className={`w-full p-2.5 flex items-center gap-3 transition-all hover:bg-stone-50 ${newCardBank === bank.id ? 'bg-stone-50/80' : ''}`}
+                                          >
+                                            <div className="w-6 h-6 flex items-center justify-center bg-white rounded-lg border border-stone-100 shadow-sm overflow-hidden shrink-0">
+                                              {bank.logo ? (
+                                                <img 
+                                                  src={getCardLogoUrl(bank.logo)} 
+                                                  alt={bank.name} 
+                                                  className="w-4 h-4 object-contain" 
+                                                  referrerPolicy="no-referrer"
+                                                  onError={(e) => handleLogoError(e, bank.logo)}
+                                                />
+                                              ) : (
+                                                <Wallet size={12} className="text-stone-400" />
+                                              )}
+                                            </div>
+                                            <span className="text-xs font-medium text-stone-700">{bank.name}</span>
+                                            {newCardBank === bank.id && (
+                                              <div className="ml-auto w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                                            )}
+                                          </button>
+                                        ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            <div>
+                              <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block mb-1.5">
+                                {newCardType === 'credit' ? 'Limite Total' : 'Saldo Atual'}
+                              </label>
+                              <input 
+                                type="text" 
+                                value={newCardLimit}
+                                onChange={(e) => setNewCardLimit(maskCurrency(e.target.value))}
+                                placeholder="0,00"
+                                className="w-full bg-stone-50 border border-stone-200 rounded-2xl py-3 px-4 outline-none focus:ring-2 ring-stone-900/5 text-right font-black text-lg"
+                                required
+                              />
+                            </div>
+                            
+                            {newCardType === 'bank' && (
+                              <div>
+                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block mb-1.5">Limite (Cheque Especial)</label>
+                                <input 
+                                  type="text" 
+                                  value={newCardOverdraft}
+                                  onChange={(e) => setNewCardOverdraft(maskCurrency(e.target.value))}
+                                  placeholder="0,00"
+                                  className="w-full bg-stone-50 border border-stone-200 rounded-2xl py-3 px-4 outline-none focus:ring-2 ring-stone-900/5 text-right font-bold text-stone-600"
+                                />
+                              </div>
+                            )}
+                            
+                            {newCardType === 'credit' && (
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block mb-1.5">Fechamento (Dia)</label>
+                                  <input 
+                                    type="number" 
+                                    value={newCardClosing}
+                                    onChange={(e) => setNewCardClosing(e.target.value)}
+                                    placeholder="Ex: 25"
+                                    className="w-full bg-stone-50 border border-stone-200 rounded-2xl py-3 px-4 outline-none focus:ring-2 ring-stone-900/5 font-medium"
+                                    required
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block mb-1.5">Vencimento (Dia)</label>
+                                  <input 
+                                    type="number" 
+                                    value={newCardDue}
+                                    onChange={(e) => setNewCardDue(e.target.value)}
+                                    placeholder="Ex: 01"
+                                    className="w-full bg-stone-50 border border-stone-200 rounded-2xl py-3 px-4 outline-none focus:ring-2 ring-stone-900/5 font-medium"
+                                    required
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          
+                          <div className="flex gap-3 pt-6 border-t border-stone-100">
+                            <button 
+                              type="button" 
+                              onClick={() => { setShowNewCardForm(false); resetCardForm(); }}
+                              className="flex-1 px-6 py-3 border border-stone-200 rounded-2xl text-sm font-bold text-stone-500 hover:bg-stone-50 transition-all active:scale-95"
+                            >
+                              Cancelar
+                            </button>
+                            <button 
+                              type="submit" 
+                              disabled={isSubmitting}
+                              className="flex-1 px-6 py-3 bg-stone-900 text-white rounded-2xl text-sm font-bold hover:shadow-xl hover:shadow-stone-200/50 hover:scale-105 active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                            >
+                              {isSubmitting && <Loader2 size={16} className="animate-spin" />}
+                              {isSubmitting ? 'Salvando...' : (editingCard ? 'Atualizar' : 'Salvar')}
+                            </button>
+                          </div>
+                        </form>
+                      </Card>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
 
               {/* Contas Correntes */}
               <div className="space-y-6">
@@ -1977,21 +2444,21 @@ export default function App() {
                           <button onClick={() => confirmDeleteCard(card)} className="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={12} /></button>
                         </div>
                       </div>
-                      <div className="flex flex-col">
-                        <div className="flex justify-between items-end">
-                          <p className="text-xl font-black text-stone-900 tracking-tighter">
-                            <span className="text-xs font-medium mr-1 text-stone-400">R$</span>
-                            {card.used.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </p>
-                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Limite Disponível</p>
-                        </div>
-                        <div className="mt-3 w-full bg-emerald-500/20 h-1.5 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-rose-500 rounded-full transition-all duration-500" 
-                            style={{ width: `${Math.max(0, Math.min(100 - (card.used / (card.limit || 1)) * 100, 100))}%` }} 
-                          />
-                        </div>
-                      </div>
+                <div className="flex flex-col">
+                  <div className="flex justify-between items-end">
+                    <p className="text-xl font-black text-stone-900 tracking-tighter" title={`Limite Disponível: R$ ${card.used.toLocaleString('pt-BR')}`}>
+                      <span className="text-xs font-medium mr-1 text-stone-400">R$</span>
+                      {card.used.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </p>
+                    <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Limite Disponível</p>
+                  </div>
+                  <div className="mt-3 w-full bg-emerald-500/10 h-1.5 rounded-full overflow-hidden border border-emerald-500/20" title="Uso do Limite">
+                    <div 
+                      className="h-full bg-rose-500 rounded-full transition-all duration-500 shadow-[0_0_8px_rgba(244,63,94,0.3)]" 
+                      style={{ width: `${Math.max(0, Math.min(100 - (card.used / (card.limit || 1)) * 100, 100))}%` }} 
+                    />
+                  </div>
+                </div>
                     </motion.div>
                   ))}
                 </div>
@@ -2108,480 +2575,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="flex flex-col lg:flex-row gap-6 items-start">
-                {showNewTransactionForm && (
-                  <motion.div 
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    className="w-full lg:w-[400px] lg:sticky lg:top-8"
-                  >
-                    <Card>
-                      <div className="flex justify-between items-center mb-4">
-                        <h3 className="font-semibold">{editingTransaction ? 'Editar Lançamento' : 'Novo Lançamento'}</h3>
-                        <button onClick={resetTransForm} className="text-stone-400 hover:text-stone-600">
-                          <X size={20} />
-                        </button>
-                      </div>
-                      <form onSubmit={handleCreateTransaction} className="space-y-4">
-                        <AnimatePresence>
-                          {errorMessage && (
-                            <motion.div 
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              className="p-3 bg-rose-50 border border-rose-100 rounded-xl text-rose-600 text-xs font-medium"
-                            >
-                              {errorMessage}
-                            </motion.div>
-                          )}
-                          {successMessage && (
-                            <motion.div 
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-600 text-xs font-medium"
-                            >
-                              {successMessage}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                        <div className="flex p-1 bg-stone-100 rounded-xl">
-                          <button 
-                            type="button" 
-                            onClick={() => {
-                              setTransType('expense');
-                              setTransCategory('');
-                            }}
-                            className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all ${transType === 'expense' ? 'bg-white shadow-sm text-rose-600' : 'text-stone-500'}`}
-                          >
-                            Despesa
-                          </button>
-                          <button 
-                            type="button" 
-                            onClick={() => {
-                              setTransType('income');
-                              setTransCategory('');
-                            }}
-                            className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all ${transType === 'income' ? 'bg-white shadow-sm text-emerald-600' : 'text-stone-500'}`}
-                          >
-                            Receita
-                          </button>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Descrição</label>
-                          <input 
-                            type="text" 
-                            value={transDescription}
-                            onChange={(e) => setTransDescription(e.target.value)}
-                            placeholder="Ex: Almoço, Salário..."
-                            className="w-full bg-transparent border-none rounded-none py-2 px-0 outline-none focus:ring-0 placeholder:text-stone-300 text-lg font-medium transition-all"
-                            required
-                          />
-                          <div className="h-px bg-stone-100 w-full" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-8">
-                          <div>
-                            <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Valor (Planejado)</label>
-                            <input 
-                              type="text" 
-                              value={transAmount}
-                              onChange={(e) => setTransAmount(maskCurrency(e.target.value))}
-                              placeholder="0,00"
-                              className={`w-full bg-transparent border-none rounded-none py-2 px-0 outline-none focus:ring-0 placeholder:text-stone-300 text-lg font-medium transition-all ${transType === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}
-                              required
-                            />
-                            <div className="h-px bg-stone-100 w-full" />
-                          </div>
-                          <div>
-                            <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Data (Prevista)</label>
-                            <input 
-                              type="date" 
-                              value={transDate}
-                              onChange={(e) => setTransDate(e.target.value)}
-                              className="w-full bg-transparent border-none rounded-none py-2 px-0 outline-none focus:ring-0 text-stone-600 font-medium transition-all"
-                              required
-                            />
-                            <div className="h-px bg-stone-100 w-full" />
-                          </div>
-                        </div>
-                        <div className="relative">
-                          <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Categoria</label>
-                          <div 
-                            onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
-                            className="w-full py-2 cursor-pointer flex justify-between items-center"
-                          >
-                            <span className={`font-medium ${transCategory ? 'text-stone-900' : 'text-stone-300'}`}>
-                              {transCategory || 'Selecionar Categoria...'}
-                            </span>
-                          </div>
-                          <div className="h-px bg-stone-100 w-full" />
-                          
-                          <AnimatePresence>
-                            {showCategoryDropdown && (
-                              <motion.div 
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 10 }}
-                                className="absolute z-50 left-0 right-0 top-full mt-2 bg-white rounded-2xl shadow-xl border border-black/5 p-4 space-y-4"
-                              >
-                                <div className="flex items-center gap-2 bg-stone-50 rounded-xl px-3 py-2">
-                                  <Search size={14} className="text-stone-400" />
-                                  <input 
-                                    type="text" 
-                                    value={categorySearch}
-                                    onChange={(e) => setCategorySearch(e.target.value)}
-                                    placeholder="Buscar ou criar..."
-                                    className="bg-transparent border-none outline-none text-sm w-full"
-                                    autoFocus
-                                  />
-                                </div>
-                                <div className="max-h-48 overflow-y-auto space-y-1">
-                                  {summary?.categories
-                                    .filter(c => c.type === transType && c.name.toLowerCase().includes(categorySearch.toLowerCase()))
-                                    .map(c => (
-                                      <button 
-                                        key={c.name}
-                                        type="button"
-                                        onClick={() => {
-                                          setTransCategory(c.name);
-                                          setShowCategoryDropdown(false);
-                                          setCategorySearch('');
-                                        }}
-                                        className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-stone-50 transition-colors"
-                                      >
-                                        {c.name}
-                                      </button>
-                                    ))}
-                                  {categorySearch && !summary?.categories.some(c => c.type === transType && c.name.toLowerCase() === categorySearch.toLowerCase()) && (
-                                    <button 
-                                      type="button"
-                                      onClick={() => handleAddCategory(categorySearch)}
-                                      className="w-full text-left px-3 py-2 rounded-lg text-sm text-emerald-600 hover:bg-emerald-50 transition-colors flex items-center gap-2"
-                                    >
-                                      <Plus size={14} />
-                                      Criar "{categorySearch}"
-                                    </button>
-                                  )}
-                                </div>
-
-                                <div className="pt-2 border-t border-stone-50">
-                                  <button 
-                                    type="button"
-                                    onClick={() => {
-                                      setShowManageCategoriesModal(true);
-                                      setShowCategoryDropdown(false);
-                                    }}
-                                    className="w-full flex items-center justify-center gap-2 py-2 text-[10px] text-stone-400 hover:text-stone-600 transition-colors uppercase tracking-widest bg-stone-50/50 rounded-xl"
-                                  >
-                                    <Settings size={12} />
-                                    Editar categorias
-                                  </button>
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
-                        <div className="relative">
-                          <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Conta/Cartão</label>
-                          <button 
-                            type="button"
-                            onClick={() => setShowAccountDropdown(!showAccountDropdown)}
-                            className="w-full flex items-center justify-between py-2 text-stone-600 font-medium transition-all group"
-                          >
-                            <div className="flex items-center gap-3">
-                              {(() => {
-                                const selectedAcc = cards.find(c => c.name === transAccount);
-                                if (!selectedAcc) return <Wallet size={16} className="text-stone-300" />;
-                                
-                                const logoDomain = selectedAcc.type === 'credit' 
-                                  ? (CARD_BRANDS.find(b => b.id === selectedAcc.brand)?.logo || selectedAcc.bankLogo || getAutoLogo(selectedAcc.name))
-                                  : (selectedAcc.bankLogo || getAutoLogo(selectedAcc.name));
-                                
-                                if (logoDomain) {
-                                  return (
-                                    <div className="w-6 h-6 bg-stone-50 rounded-lg flex items-center justify-center border border-stone-100 overflow-hidden shrink-0">
-                                      <img 
-                                        src={getCardLogoUrl(logoDomain)} 
-                                        alt="" 
-                                        className="w-4 h-4 object-contain"
-                                        referrerPolicy="no-referrer"
-                                      />
-                                    </div>
-                                  );
-                                }
-                                return selectedAcc.type === 'bank' ? <Wallet size={16} className="text-stone-300" /> : <CreditCard size={16} className="text-stone-300" />;
-                              })()}
-                              <span>{transAccount}</span>
-                            </div>
-                            <ChevronDown size={14} className={`text-stone-300 transition-transform ${showAccountDropdown ? 'rotate-180' : ''}`} />
-                          </button>
-                          <div className="h-px bg-stone-100 w-full" />
-
-                          <AnimatePresence>
-                            {showAccountDropdown && (
-                              <motion.div 
-                                initial={{ opacity: 0, y: -10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 10 }}
-                                className="absolute z-50 left-0 right-0 top-full mt-2 bg-white rounded-2xl shadow-xl border border-black/5 p-4 space-y-4"
-                              >
-                                <div className="flex items-center gap-2 bg-stone-50 rounded-xl px-3 py-2">
-                                  <Search size={14} className="text-stone-400" />
-                                  <input 
-                                    type="text" 
-                                    value={accountSearch}
-                                    onChange={(e) => setAccountSearch(e.target.value)}
-                                    placeholder="Pesquisar conta..."
-                                    className="bg-transparent border-none outline-none text-sm w-full"
-                                    autoFocus
-                                  />
-                                </div>
-                                <div className="max-h-60 overflow-y-auto space-y-4">
-                                  {/* Contas Correntes */}
-                                  {cards.filter(c => c.type === 'bank' && c.name.toLowerCase().includes(accountSearch.toLowerCase())).length > 0 && (
-                                    <div className="space-y-1">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest px-3 mb-2">Contas Correntes</p>
-                                      {cards
-                                        .filter(c => c.type === 'bank' && c.name.toLowerCase().includes(accountSearch.toLowerCase()))
-                                        .map(acc => {
-                                          const logoDomain = acc.bankLogo || getAutoLogo(acc.name);
-                                          return (
-                                            <button 
-                                              key={acc.id}
-                                              type="button"
-                                              onClick={() => {
-                                                setTransAccount(acc.name);
-                                                setShowAccountDropdown(false);
-                                                setAccountSearch('');
-                                              }}
-                                              className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm hover:bg-stone-50 transition-colors group"
-                                            >
-                                              <div className="w-8 h-8 bg-white border border-stone-100 rounded-lg flex items-center justify-center overflow-hidden shrink-0 shadow-sm group-hover:scale-110 transition-transform">
-                                                {logoDomain ? (
-                                                  <img src={getCardLogoUrl(logoDomain)} alt="" className="w-5 h-5 object-contain" />
-                                                ) : (
-                                                  <Wallet size={16} className="text-stone-300" />
-                                                )}
-                                              </div>
-                                              <div className="text-left">
-                                                <p className="font-bold text-stone-900 leading-tight">{acc.name}</p>
-                                                <p className="text-[9px] text-stone-400 uppercase font-bold tracking-tighter">Saldo R$ {acc.used.toLocaleString('pt-BR')}</p>
-                                              </div>
-                                            </button>
-                                          );
-                                        })}
-                                    </div>
-                                  )}
-
-                                  {/* Cartões de Crédito */}
-                                  {cards.filter(c => c.type === 'credit' && c.name.toLowerCase().includes(accountSearch.toLowerCase())).length > 0 && (
-                                    <div className="space-y-1">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest px-3 mb-2">Cartões de Crédito</p>
-                                      {cards
-                                        .filter(c => c.type === 'credit' && c.name.toLowerCase().includes(accountSearch.toLowerCase()))
-                                        .map(card => {
-                                          const logoDomain = CARD_BRANDS.find(b => b.id === card.brand)?.logo || card.bankLogo || getAutoLogo(card.name);
-                                          return (
-                                            <button 
-                                              key={card.id}
-                                              type="button"
-                                              onClick={() => {
-                                                setTransAccount(card.name);
-                                                setShowAccountDropdown(false);
-                                                setAccountSearch('');
-                                              }}
-                                              className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm hover:bg-stone-50 transition-colors group"
-                                            >
-                                              <div className="w-8 h-8 bg-white border border-stone-100 rounded-lg flex items-center justify-center overflow-hidden shrink-0 shadow-sm group-hover:scale-110 transition-transform">
-                                                {logoDomain ? (
-                                                  <img src={getCardLogoUrl(logoDomain)} alt="" className="w-5 h-5 object-contain" />
-                                                ) : (
-                                                  <CreditCard size={16} className="text-stone-300" />
-                                                )}
-                                              </div>
-                                              <div className="text-left">
-                                                <p className="font-bold text-stone-900 leading-tight">{card.name}</p>
-                                                <p className="text-[9px] text-stone-400 uppercase font-bold tracking-tighter">Limite Disp. R$ {(card.limit - card.used).toLocaleString('pt-BR')}</p>
-                                              </div>
-                                            </button>
-                                          );
-                                        })}
-                                    </div>
-                                  )}
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
-
-                        <div className="pt-2">
-                          <button 
-                            type="button" 
-                            onClick={() => {
-                              const nextValue = !showRealizedFields;
-                              setShowRealizedFields(nextValue);
-                              if (nextValue && transPayments.length === 0) {
-                                setTransPayments([{ amount: transAmount, date: new Date().toISOString().split('T')[0] }]);
-                              }
-                            }}
-                            className={`flex items-center gap-2 text-[10px] font-medium px-3 py-1.5 rounded-full border transition-all ${showRealizedFields ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-transparent border-stone-200 text-stone-400 hover:text-stone-600'}`}
-                          >
-                            <CheckCircle2 size={12} />
-                            Adicionar Pagamento
-                          </button>
-                        </div>
-
-                        <AnimatePresence>
-                          {showRealizedFields && (
-                            <motion.div 
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              className="overflow-hidden space-y-4 pt-4 border-t border-emerald-100 bg-emerald-50/30 p-4 rounded-3xl mt-4"
-                            >
-                              <div className="space-y-4">
-                                {transPayments.map((payment, index) => (
-                                  <div key={index} className="grid grid-cols-2 gap-4 relative p-4 bg-white/50 rounded-2xl border border-emerald-100/50">
-                                    <div>
-                                      <label className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block mb-1">Valor Pagamento</label>
-                                      <input 
-                                        type="text" 
-                                        value={payment.amount}
-                                        onChange={(e) => {
-                                          const newPayments = [...transPayments];
-                                          newPayments[index].amount = maskCurrency(e.target.value);
-                                          setTransPayments(newPayments);
-                                        }}
-                                        placeholder="0,00"
-                                        className="w-full bg-white border border-emerald-100 rounded-2xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-sm font-medium text-emerald-700"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block mb-1">Data Pagamento</label>
-                                      <input 
-                                        type="date" 
-                                        value={payment.date}
-                                        onChange={(e) => {
-                                          const newPayments = [...transPayments];
-                                          newPayments[index].date = e.target.value;
-                                          setTransPayments(newPayments);
-                                        }}
-                                        className="w-full bg-white border border-emerald-100 rounded-2xl py-2 px-3 outline-none focus:ring-2 ring-emerald-500/10 text-sm font-medium text-emerald-700"
-                                      />
-                                    </div>
-                                    {transPayments.length > 1 && (
-                                      <button 
-                                        type="button"
-                                        onClick={() => setTransPayments(transPayments.filter((_, i) => i !== index))}
-                                        className="absolute -right-2 -top-2 p-1 bg-white rounded-full shadow-sm text-stone-400 hover:text-rose-500 transition-colors border border-stone-200"
-                                      >
-                                        <X size={10} />
-                                      </button>
-                                    )}
-                                  </div>
-                                ))}
-                                <button 
-                                  type="button"
-                                  onClick={() => setTransPayments([...transPayments, { amount: '', date: new Date().toISOString().split('T')[0] }])}
-                                  className="w-full py-3 border-2 border-dashed border-emerald-200 rounded-2xl text-[10px] font-bold text-emerald-600 uppercase tracking-widest hover:bg-emerald-50 transition-all flex items-center justify-center gap-2"
-                                >
-                                  <Plus size={12} />
-                                  Adicionar Pagamento
-                                </button>
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-
-                        <div className="pt-4 border-t border-stone-50 mt-4">
-                          <button 
-                            type="button" 
-                            onClick={() => setIsRecurring(!isRecurring)}
-                            className={`flex items-center gap-2 text-[10px] font-medium px-3 py-1.5 rounded-full border transition-all ${isRecurring ? 'bg-stone-900 border-stone-900 text-white' : 'bg-transparent border-stone-200 text-stone-400 hover:text-stone-600'}`}
-                          >
-                            <Repeat size={12} />
-                            {isRecurring ? 'Lançamento Recorrente' : 'Marcar como Recorrente'}
-                          </button>
-                        </div>
-
-                        <AnimatePresence>
-                          {isRecurring && (
-                            <motion.div 
-                              initial={{ opacity: 0, height: 0, marginTop: 0 }}
-                              animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
-                              exit={{ opacity: 0, height: 0, marginTop: 0 }}
-                              className="overflow-hidden space-y-4 pt-4 border-t border-stone-50"
-                            >
-                                <div className="flex gap-4">
-                                  <label className="flex items-center gap-2 cursor-pointer">
-                                    <input 
-                                      type="radio" 
-                                      name="recurrenceMode"
-                                      checked={recurrenceMode === 'continuous'} 
-                                      onChange={() => setRecurrenceMode('continuous')}
-                                      className="accent-stone-900"
-                                    />
-                                    <span className="text-[10px] text-stone-600 uppercase tracking-wider">Recorrência</span>
-                                  </label>
-                                  <label className="flex items-center gap-2 cursor-pointer">
-                                    <input 
-                                      type="radio" 
-                                      name="recurrenceMode"
-                                      checked={recurrenceMode === 'installments'} 
-                                      onChange={() => setRecurrenceMode('installments')}
-                                      className="accent-stone-900"
-                                    />
-                                    <span className="text-[10px] text-stone-600 uppercase tracking-wider">Parcelado</span>
-                                  </label>
-                                </div>
-
-                                {recurrenceMode === 'continuous' ? (
-                                  <div>
-                                    <label className="text-[10px] font-medium text-stone-400 uppercase tracking-wider block mb-2">Frequência</label>
-                                    <div className="flex gap-2">
-                                      {['monthly', 'weekly'].map((f) => (
-                                        <button 
-                                          key={f}
-                                          type="button" 
-                                          onClick={() => setTransFrequency(f as any)}
-                                          className={`px-3 py-1 text-[10px] uppercase tracking-widest rounded-lg border transition-all ${transFrequency === f ? 'bg-stone-800 border-stone-800 text-white font-medium' : 'bg-transparent border-stone-100 text-stone-400'}`}
-                                        >
-                                          {f === 'monthly' ? 'Mensal' : 'Semanal'}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div>
-                                    <label className="text-[10px] font-medium text-stone-400 uppercase tracking-wider block mb-1">Número de Parcelas</label>
-                                    <input 
-                                      type="number" 
-                                      min="2"
-                                      value={installmentsCount}
-                                      onChange={(e) => setInstallmentsCount(e.target.value)}
-                                      className="w-full bg-stone-50 border border-black/5 rounded-xl py-2 px-4 outline-none focus:ring-2 ring-stone-900/5 transition-all text-sm"
-                                      placeholder="Ex: 3, 4, 12..."
-                                    />
-                                  </div>
-                                )}
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-
-                        <button 
-                          type="submit" 
-                          disabled={isSubmitting}
-                          className="w-full py-3 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 hover:shadow-xl hover:shadow-stone-200 hover:scale-[1.02] active:scale-95 transition-all mt-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                        >
-                          {isSubmitting && <Loader2 size={18} className="animate-spin" />}
-                          {isSubmitting ? 'Processando...' : (editingTransaction ? 'Atualizar' : 'Confirmar Lançamento')}
-                        </button>
-                      </form>
-                    </Card>
-                  </motion.div>
-                )}
-
-                <div className="flex-1 w-full space-y-6">
+              <div className="space-y-6 flex-1 w-full">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-2">
                     <div className="flex flex-col sm:flex-row sm:items-center bg-white p-1 rounded-2xl border border-stone-100 shadow-sm gap-2">
@@ -2780,7 +2774,7 @@ export default function App() {
                             >
                               <option value="all">Todas</option>
                               {summary?.categories.map(cat => (
-                                <option key={cat.name} value={cat.name}>{cat.name}</option>
+                                <option key={`${cat.type}-${cat.name}`} value={cat.name}>{cat.name} ({cat.type === 'income' ? 'Rec' : 'Desp'})</option>
                               ))}
                             </select>
                           </div>
@@ -2822,7 +2816,15 @@ export default function App() {
                       <table className="w-full text-left">
                         <thead>
                           <tr className="border-b border-black/5">
-                            <th className="pb-4 text-[10px] uppercase tracking-[0.2em] font-bold text-stone-400 group cursor-pointer hover:text-stone-900 transition-colors px-4" onClick={() => handleSort('date')}>
+                            <th className="pb-4 px-4 w-10">
+                              <button 
+                                onClick={() => handleSelectAll(filteredTransactions.map(t => t.id.toString()))}
+                                className={`p-2 rounded-lg transition-all ${filteredTransactions.length > 0 && filteredTransactions.every(t => selectedTransactions.includes(t.id.toString())) ? 'text-stone-900 bg-stone-100' : 'text-stone-300 hover:text-stone-900 hover:bg-stone-50'}`}
+                              >
+                                {filteredTransactions.length > 0 && filteredTransactions.every(t => selectedTransactions.includes(t.id.toString())) ? <CheckSquare size={16} /> : <Square size={16} />}
+                              </button>
+                            </th>
+                            <th className="pb-4 text-[10px] uppercase tracking-[0.2em] font-bold text-stone-400 group cursor-pointer hover:text-stone-900 transition-colors" onClick={() => handleSort('date')}>
                               <div className="flex items-center gap-1">
                                 Data
                                 <ArrowUpDown size={10} className={`${sortField === 'date' ? 'text-stone-900 opacity-100' : 'opacity-0 group-hover:opacity-100'}`} />
@@ -2852,7 +2854,15 @@ export default function App() {
                         <tbody className="divide-y divide-black/5">
                           {filteredTransactions.length > 0 ? (
                             filteredTransactions.map((t) => (
-                              <tr key={t.id} className={`group hover:bg-stone-50 transition-all duration-300 ${t.settled ? 'opacity-40 grayscale-[0.2]' : ''}`}>
+                              <tr key={t.id} className={`group hover:bg-stone-50 transition-all duration-300 ${t.settled ? 'opacity-40 grayscale-[0.2]' : ''} ${selectedTransactions.includes(t.id.toString()) ? 'bg-emerald-50/30' : ''}`}>
+                                <td className="py-4 px-4">
+                                  <button 
+                                    onClick={() => handleToggleSelect(t.id.toString())}
+                                    className={`p-2 rounded-lg transition-all ${selectedTransactions.includes(t.id.toString()) ? 'text-emerald-600 bg-emerald-100' : 'text-stone-300 hover:text-stone-600 hover:bg-stone-100 opacity-0 group-hover:opacity-100'}`}
+                                  >
+                                    {selectedTransactions.includes(t.id.toString()) ? <CheckSquare size={16} /> : <Square size={16} />}
+                                  </button>
+                                </td>
                                 <td className="py-4 text-sm text-stone-500 whitespace-nowrap">
                                   <div className="flex items-center gap-3">
                                     {getTransactionStatus(t) === 'settled' && <CheckCircle2 size={14} className="text-emerald-500" />}
@@ -2903,7 +2913,7 @@ export default function App() {
                                         <button 
                                           onClick={() => handleQuitarClick(t)} 
                                           className="p-2 rounded-lg transition-all hover:scale-110 active:scale-90 hover:bg-emerald-50 text-emerald-500 hover:text-emerald-600 hover:shadow-md"
-                                          title="Quitar"
+                                          title="Concluir"
                                         >
                                           <CheckCircle2 size={16} />
                                         </button>
@@ -2927,7 +2937,7 @@ export default function App() {
                             ))
                           ) : (
                             <tr>
-                              <td colSpan={5} className="py-12 text-center">
+                              <td colSpan={6} className="py-12 text-center">
                                 <p className="text-xs text-stone-400 uppercase tracking-widest font-medium">Nenhum lançamento para este período</p>
                               </td>
                             </tr>
@@ -2937,7 +2947,6 @@ export default function App() {
                     </div>
                   </Card>
                 </div>
-              </div>
             </motion.div>
           )}
 
@@ -3032,7 +3041,7 @@ export default function App() {
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5"
+                className="bg-white w-full max-w-3xl rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5"
               >
                 <div className="p-8 border-b border-stone-100 flex justify-between items-center bg-stone-50/30">
                   <div>
@@ -3044,8 +3053,8 @@ export default function App() {
                   </button>
                 </div>
                 
-                <div className="p-8 max-h-[60vh] overflow-y-auto space-y-10 custom-scrollbar">
-                  <div className="grid grid-cols-2 gap-12">
+                <div className="p-8 max-h-[70vh] overflow-y-auto space-y-10 custom-scrollbar">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-16 gap-y-10">
                     {/* Despesas */}
                     <div className="space-y-6">
                       <div className="flex items-center justify-between px-1">
@@ -3086,41 +3095,75 @@ export default function App() {
                             </div>
                           </div>
                         )}
-                        {summary?.categories.filter(c => c.type === 'expense').map(c => (
-                          <div key={c.name} className="flex items-center justify-between group p-3 hover:bg-stone-50 rounded-2xl transition-all">
-                            {editingCategoryInModal?.name === c.name && editingCategoryInModal?.type === 'expense' ? (
-                              <input 
-                                autoFocus
-                                className="text-sm font-medium bg-transparent border-b-2 border-stone-900 outline-none w-full mr-4 py-1"
-                                value={newCategoryNameInModal}
-                                onChange={(e) => setNewCategoryNameInModal(e.target.value)}
-                                onBlur={() => handleUpdateCategory('expense', c.name, newCategoryNameInModal)}
-                                onKeyDown={(e) => e.key === 'Enter' && handleUpdateCategory('expense', c.name, newCategoryNameInModal)}
-                              />
-                            ) : (
-                              <span className="text-sm text-stone-600 font-medium">{c.name}</span>
-                            )}
-                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
-                                onClick={() => {
-                                  setEditingCategoryInModal({ name: c.name, type: 'expense' });
-                                  setNewCategoryNameInModal(c.name);
-                                }}
-                                className="p-2 hover:bg-white hover:shadow-sm rounded-xl text-stone-400 hover:text-stone-900 transition-all border border-transparent hover:border-black/5"
-                                title="Editar"
-                              >
-                                <Edit2 size={12} />
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteCategory('expense', c.name)}
-                                className="p-2 hover:bg-rose-50 rounded-xl text-stone-400 hover:text-rose-600 transition-all border border-transparent hover:border-rose-100"
-                                title="Excluir"
-                              >
-                                <Trash2 size={12} />
-                              </button>
+                      <DragDropContext onDragEnd={(res) => onDragEnd(res, 'expense')}>
+                        <Droppable droppableId="expense-categories">
+                          {(provided) => (
+                            <div 
+                              {...provided.droppableProps}
+                              ref={provided.innerRef}
+                              className="space-y-1"
+                            >
+                              {summary?.categories.filter(c => c.type === 'expense').map((c, index) => {
+                                const DraggableAny = Draggable as any;
+                                return (
+                                  <DraggableAny key={`${c.type}-${c.name}`} draggableId={`${c.type}-${c.name}`} index={index}>
+                                    {(provided: any, snapshot: any) => (
+                                      <div 
+                                        ref={provided.innerRef}
+                                        {...provided.draggableProps}
+                                        {...provided.dragHandleProps}
+                                        className={`flex items-center justify-between group p-3 rounded-2xl transition-all ${snapshot.isDragging ? 'bg-white shadow-xl ring-1 ring-black/5 z-50' : 'hover:bg-stone-50'}`}
+                                      >
+                                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                                          <div className="text-stone-300 group-hover:text-stone-500 transition-colors cursor-grab p-1">
+                                            <GripVertical size={14} />
+                                          </div>
+                                          {editingCategoryInModal?.name === c.name && editingCategoryInModal?.type === 'expense' ? (
+                                            <input 
+                                              autoFocus
+                                              className="text-sm font-medium bg-transparent border-b-2 border-stone-900 outline-none w-full mr-4 py-1"
+                                              value={newCategoryNameInModal}
+                                              onChange={(e) => setNewCategoryNameInModal(e.target.value)}
+                                              onBlur={() => handleUpdateCategory('expense', c.name, newCategoryNameInModal)}
+                                              onKeyDown={(e) => e.key === 'Enter' && handleUpdateCategory('expense', c.name, newCategoryNameInModal)}
+                                            />
+                                          ) : (
+                                            <span className="text-sm text-stone-600 font-medium">{c.name}</span>
+                                          )}
+                                        </div>
+                                        <div className="flex gap-1 items-center ml-2">
+                                          <button 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setEditingCategoryInModal({ name: c.name, type: 'expense' });
+                                              setNewCategoryNameInModal(c.name);
+                                            }}
+                                            className="p-2 hover:bg-stone-100 rounded-xl text-stone-500 hover:text-stone-900 transition-all font-medium flex items-center justify-center"
+                                            title="Editar"
+                                          >
+                                            <Edit2 size={16} />
+                                          </button>
+                                          <button 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleDeleteCategory('expense', c.name);
+                                            }}
+                                            className="p-2 hover:bg-rose-100 rounded-xl text-rose-500 hover:text-rose-600 transition-all font-medium flex items-center justify-center"
+                                            title="Excluir"
+                                          >
+                                            <Trash2 size={16} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </DraggableAny>
+                                );
+                              })}
+                              {provided.placeholder}
                             </div>
-                          </div>
-                        ))}
+                          )}
+                        </Droppable>
+                      </DragDropContext>
                       </div>
                     </div>
 
@@ -3164,41 +3207,75 @@ export default function App() {
                             </div>
                           </div>
                         )}
-                        {summary?.categories.filter(c => c.type === 'income').map(c => (
-                          <div key={c.name} className="flex items-center justify-between group p-3 hover:bg-stone-50 rounded-2xl transition-all">
-                            {editingCategoryInModal?.name === c.name && editingCategoryInModal?.type === 'income' ? (
-                              <input 
-                                autoFocus
-                                className="text-sm font-medium bg-transparent border-b-2 border-stone-900 outline-none w-full mr-4 py-1"
-                                value={newCategoryNameInModal}
-                                onChange={(e) => setNewCategoryNameInModal(e.target.value)}
-                                onBlur={() => handleUpdateCategory('income', c.name, newCategoryNameInModal)}
-                                onKeyDown={(e) => e.key === 'Enter' && handleUpdateCategory('income', c.name, newCategoryNameInModal)}
-                              />
-                            ) : (
-                              <span className="text-sm text-stone-600 font-medium">{c.name}</span>
+                        <DragDropContext onDragEnd={(res) => onDragEnd(res, 'income')}>
+                          <Droppable droppableId="income-categories">
+                            {(provided) => (
+                              <div 
+                                {...provided.droppableProps}
+                                ref={provided.innerRef}
+                                className="space-y-1"
+                              >
+                                {summary?.categories.filter(c => c.type === 'income').map((c, index) => {
+                                  const DraggableAny = Draggable as any;
+                                  return (
+                                    <DraggableAny key={`${c.type}-${c.name}`} draggableId={`${c.type}-${c.name}`} index={index}>
+                                      {(provided: any, snapshot: any) => (
+                                        <div 
+                                          ref={provided.innerRef}
+                                          {...provided.draggableProps}
+                                          {...provided.dragHandleProps}
+                                          className={`flex items-center justify-between group p-3 rounded-2xl transition-all ${snapshot.isDragging ? 'bg-white shadow-xl ring-1 ring-black/5 z-50' : 'hover:bg-stone-50'}`}
+                                        >
+                                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                                            <div className="text-stone-300 group-hover:text-stone-500 transition-colors cursor-grab p-1">
+                                              <GripVertical size={14} />
+                                            </div>
+                                            {editingCategoryInModal?.name === c.name && editingCategoryInModal?.type === 'income' ? (
+                                              <input 
+                                                autoFocus
+                                                className="text-sm font-medium bg-transparent border-b-2 border-stone-900 outline-none w-full mr-4 py-1"
+                                                value={newCategoryNameInModal}
+                                                onChange={(e) => setNewCategoryNameInModal(e.target.value)}
+                                                onBlur={() => handleUpdateCategory('income', c.name, newCategoryNameInModal)}
+                                                onKeyDown={(e) => e.key === 'Enter' && handleUpdateCategory('income', c.name, newCategoryNameInModal)}
+                                              />
+                                            ) : (
+                                              <span className="text-sm text-stone-600 font-medium">{c.name}</span>
+                                            )}
+                                          </div>
+                                          <div className="flex gap-1 items-center ml-2">
+                                            <button 
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setEditingCategoryInModal({ name: c.name, type: 'income' });
+                                                setNewCategoryNameInModal(c.name);
+                                              }}
+                                              className="p-2 hover:bg-stone-100 rounded-xl text-stone-500 hover:text-stone-900 transition-all font-medium flex items-center justify-center"
+                                              title="Editar"
+                                            >
+                                              <Edit2 size={16} />
+                                            </button>
+                                            <button 
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDeleteCategory('income', c.name);
+                                              }}
+                                              className="p-2 hover:bg-rose-100 rounded-xl text-rose-500 hover:text-rose-600 transition-all font-medium flex items-center justify-center"
+                                              title="Excluir"
+                                            >
+                                              <Trash2 size={16} />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </DraggableAny>
+                                  );
+                                })}
+                                {provided.placeholder}
+                              </div>
                             )}
-                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
-                                onClick={() => {
-                                  setEditingCategoryInModal({ name: c.name, type: 'income' });
-                                  setNewCategoryNameInModal(c.name);
-                                }}
-                                className="p-2 hover:bg-white hover:shadow-sm rounded-xl text-stone-400 hover:text-stone-900 transition-all border border-transparent hover:border-black/5"
-                                title="Editar"
-                              >
-                                <Edit2 size={12} />
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteCategory('income', c.name)}
-                                className="p-2 hover:bg-rose-50 rounded-xl text-stone-400 hover:text-rose-600 transition-all border border-transparent hover:border-rose-100"
-                                title="Excluir"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                          </Droppable>
+                        </DragDropContext>
                       </div>
                     </div>
                   </div>
@@ -3332,7 +3409,7 @@ export default function App() {
                       onClick={handleConfirmQuitarAnyway}
                       className="w-full py-4 bg-white border border-stone-200 text-stone-900 rounded-2xl text-sm font-bold hover:bg-stone-50 transition-all active:scale-95"
                     >
-                      Quitar assim mesmo
+                      Concluir assim mesmo
                     </button>
                     <button 
                       onClick={() => setShowQuitarWarning(false)}
@@ -3407,6 +3484,464 @@ export default function App() {
             </motion.div>
           )}
 
+          {showNewTransactionForm && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md overflow-y-auto"
+              onClick={(e) => e.target === e.currentTarget && resetTransForm()}
+            >
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white w-full max-w-4xl rounded-[2.5rem] shadow-2xl border border-black/5 relative my-auto"
+              >
+                <div className="p-8 sm:p-10">
+                  <div className="flex justify-between items-center mb-6">
+                    <div>
+                      <h3 className="text-xl font-bold text-stone-900 tracking-tight">
+                        {editingTransaction ? 'Editar Lançamento' : 'Novo Lançamento'}
+                      </h3>
+                      <p className="text-[10px] text-stone-400 font-bold uppercase tracking-widest mt-0.5">Gestão de Fluxo de Caixa</p>
+                    </div>
+                    <button onClick={resetTransForm} className="p-2 hover:bg-stone-50 rounded-xl transition-all text-stone-400 hover:text-stone-900">
+                      <X size={24} />
+                    </button>
+                  </div>
+                  
+                  <form onSubmit={handleCreateTransaction} className="space-y-6">
+                    <AnimatePresence>
+                      {errorMessage && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="p-3 bg-rose-50 border border-rose-100 rounded-xl text-rose-600 text-xs font-medium"
+                        >
+                          {errorMessage}
+                        </motion.div>
+                      )}
+                      {successMessage && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-600 text-xs font-medium"
+                        >
+                          {successMessage}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <div className="flex p-1 bg-stone-100 rounded-xl max-w-xs">
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          setTransType('expense');
+                          setTransCategory('');
+                        }}
+                        className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-widest rounded-lg transition-all ${transType === 'expense' ? 'bg-white shadow-sm text-rose-600' : 'text-stone-400'}`}
+                      >
+                        Despesa
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          setTransType('income');
+                          setTransCategory('');
+                        }}
+                        className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-widest rounded-lg transition-all ${transType === 'income' ? 'bg-white shadow-sm text-emerald-600' : 'text-stone-400'}`}
+                      >
+                        Receita
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-5">
+                      <div className="md:col-span-2 lg:col-span-4">
+                        <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Descrição</label>
+                        <input 
+                          type="text" 
+                          value={transDescription}
+                          onChange={(e) => setTransDescription(e.target.value)}
+                          placeholder="Ex: Almoço, Salário..."
+                          className="w-full bg-transparent border-none rounded-none py-1.5 px-0 outline-none focus:ring-0 placeholder:text-stone-300 text-lg font-semibold text-stone-900 border-b border-stone-100 focus:border-stone-400 transition-all"
+                          required
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Valor</label>
+                        <input 
+                          type="text" 
+                          value={transAmount}
+                          onChange={(e) => setTransAmount(maskCurrency(e.target.value))}
+                          placeholder="0,00"
+                          className={`w-full bg-transparent border-none rounded-none py-1.5 px-0 outline-none focus:ring-0 placeholder:text-stone-300 text-lg font-bold border-b border-stone-100 focus:border-stone-400 transition-all ${transType === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}
+                          required
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Data</label>
+                        <input 
+                          type="date" 
+                          value={transDate}
+                          onChange={(e) => setTransDate(e.target.value)}
+                          className="w-full bg-transparent border-none rounded-none py-1 px-0 outline-none focus:ring-0 text-stone-600 font-semibold border-b border-stone-100 focus:border-stone-400 transition-all text-sm"
+                          required
+                        />
+                      </div>
+
+                      <div className="relative space-y-1 md:col-span-2 lg:col-span-1">
+                        <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Categoria</label>
+                        <div 
+                          onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
+                          className="w-full py-1 cursor-pointer flex justify-between items-center border-b border-stone-100 hover:border-stone-300 transition-all"
+                        >
+                          <span className={`font-semibold text-sm ${transCategory ? 'text-stone-900' : 'text-stone-300'}`}>
+                            {transCategory || 'Selecionar...'}
+                          </span>
+                        </div>
+                        
+                        <AnimatePresence>
+                          {showCategoryDropdown && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: 10 }}
+                              className="absolute z-[120] left-0 right-0 top-full mt-2 bg-white rounded-2xl shadow-2xl border border-black/5 p-4 space-y-4 min-w-[280px]"
+                            >
+                              <div className="flex items-center gap-2 bg-stone-50 rounded-xl px-3 py-2">
+                                <Search size={14} className="text-stone-400" />
+                                <input 
+                                  type="text" 
+                                  value={categorySearch}
+                                  onChange={(e) => setCategorySearch(e.target.value)}
+                                  placeholder="Buscar ou criar..."
+                                  className="bg-transparent border-none outline-none text-sm w-full"
+                                  autoFocus
+                                />
+                              </div>
+                              <div className="max-h-60 overflow-y-auto space-y-1 custom-scrollbar">
+                                  {summary?.categories
+                                    .filter(c => c.type === transType && c.name.toLowerCase().includes(categorySearch.toLowerCase()))
+                                    .map(c => (
+                                      <button 
+                                        key={`${c.type}-${c.name}`}
+                                        type="button"
+                                        onClick={() => {
+                                          setTransCategory(c.name);
+                                          setShowCategoryDropdown(false);
+                                          setCategorySearch('');
+                                        }}
+                                        className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-stone-50 transition-colors"
+                                      >
+                                        {c.name}
+                                      </button>
+                                    ))}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                      <div className="relative space-y-1 md:col-span-2 lg:col-span-1">
+                        <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Conta/Cartão</label>
+                        <button 
+                          type="button"
+                          onClick={() => setShowAccountDropdown(!showAccountDropdown)}
+                          className="w-full flex items-center justify-between py-1 text-stone-600 font-semibold border-b border-stone-100 hover:border-stone-300 transition-all group"
+                        >
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            {transAccount && (
+                              <div className="text-stone-400">
+                                {(() => {
+                                  const card = computedCards.find(c => c.name === transAccount);
+                                  if (!card) return <Landmark size={14} />;
+                                  const logoDomain = card.type === 'credit' 
+                                    ? (CARD_BRANDS.find(b => b.id === card.brand)?.logo || card.bankLogo || getAutoLogo(card.name) || '')
+                                    : (card.bankLogo || getAutoLogo(card.name) || '');
+                                  
+                                  if (logoDomain) {
+                                    return (
+                                      <img 
+                                        src={getCardLogoUrl(logoDomain)} 
+                                        alt="" 
+                                        className="w-4 h-4 object-contain"
+                                        referrerPolicy="no-referrer"
+                                        onError={(e) => handleLogoError(e, logoDomain)}
+                                      />
+                                    );
+                                  }
+                                  return card.type === 'credit' ? <CreditCard size={14} /> : <Landmark size={14} />;
+                                })()}
+                              </div>
+                            )}
+                            <span className={`truncate text-sm ${!transAccount ? 'text-stone-400 font-normal italic' : ''}`}>
+                              {transAccount || 'Selecionar...'}
+                            </span>
+                          </div>
+                          <ChevronDown size={14} className={`text-stone-300 transition-transform ${showAccountDropdown ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        <AnimatePresence>
+                          {showAccountDropdown && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: 10 }}
+                              className="absolute z-[120] left-0 right-0 top-full mt-2 bg-white rounded-2xl shadow-2xl border border-black/5 p-4 space-y-4 min-w-[280px]"
+                            >
+                              <div className="flex items-center gap-2 bg-stone-50 rounded-xl px-3 py-2">
+                                <Search size={14} className="text-stone-400" />
+                                <input 
+                                  type="text" 
+                                  value={accountSearch}
+                                  onChange={(e) => setAccountSearch(e.target.value)}
+                                  placeholder="Pesquisar..."
+                                  className="bg-transparent border-none outline-none text-sm w-full"
+                                  autoFocus
+                                />
+                              </div>
+                              <div className="max-h-60 overflow-y-auto space-y-6 custom-scrollbar pr-1">
+                                {['bank', 'credit'].map((groupType) => {
+                                  const filtered = computedCards.filter(c => 
+                                    (c.type === groupType || (!c.type && groupType === 'bank')) && 
+                                    c.name.toLowerCase().includes(accountSearch.toLowerCase())
+                                  );
+                                  
+                                  if (filtered.length === 0) return null;
+
+                                  return (
+                                    <div key={groupType} className="space-y-3">
+                                      <div className="flex items-center gap-3 px-3 py-1 bg-stone-50 rounded-lg">
+                                        <p className="text-[10px] font-black text-stone-500 uppercase tracking-[0.2em] whitespace-nowrap">
+                                          {groupType === 'bank' ? 'Contas Bancárias' : 'Cartões de Crédito'}
+                                        </p>
+                                        <div className="h-px flex-1 bg-stone-200/50"></div>
+                                      </div>
+                                      <div className="space-y-1">
+                                        {filtered.map(acc => (
+                                          <button 
+                                            key={acc.id}
+                                            type="button"
+                                            onClick={() => {
+                                              setTransAccount(acc.name);
+                                              setShowAccountDropdown(false);
+                                              setAccountSearch('');
+                                            }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm hover:bg-stone-50 transition-all text-left group/acc"
+                                          >
+                                            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-white border border-stone-100 shadow-sm group-hover/acc:scale-110 transition-transform overflow-hidden">
+                                              {(() => {
+                                                const logoDomain = acc.type === 'credit' 
+                                                  ? (CARD_BRANDS.find(b => b.id === acc.brand)?.logo || acc.bankLogo || getAutoLogo(acc.name) || '')
+                                                  : (acc.bankLogo || getAutoLogo(acc.name) || '');
+                                                
+                                                if (logoDomain) {
+                                                  return (
+                                                    <img 
+                                                      src={getCardLogoUrl(logoDomain)} 
+                                                      alt="" 
+                                                      className="w-6 h-6 object-contain"
+                                                      referrerPolicy="no-referrer"
+                                                      onError={(e) => handleLogoError(e, logoDomain)}
+                                                    />
+                                                  );
+                                                }
+                                                return acc.type === 'credit' ? <CreditCard size={18} className="text-stone-400" /> : <Landmark size={18} className="text-stone-400" />;
+                                              })()}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                              <p className="font-bold text-stone-900 leading-tight truncate">{acc.name}</p>
+                                            </div>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-4 pt-4 border-t border-stone-50">
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          const nextValue = !showRealizedFields;
+                          setShowRealizedFields(nextValue);
+                          if (nextValue && transPayments.length === 0) {
+                            setTransPayments([{ amount: transAmount, date: new Date().toISOString().split('T')[0] }]);
+                          }
+                        }}
+                        className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest px-5 py-2.5 rounded-full border transition-all ${showRealizedFields ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-transparent border-stone-200 text-stone-400 hover:text-stone-600'}`}
+                      >
+                        <CheckCircle2 size={12} />
+                        Pagamento realizado
+                      </button>
+
+                      <button 
+                        type="button" 
+                        onClick={() => setIsRecurring(!isRecurring)}
+                        className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest px-5 py-2.5 rounded-full border transition-all ${isRecurring ? 'bg-stone-900 border-stone-900 text-white shadow-lg shadow-stone-200' : 'bg-transparent border-stone-200 text-stone-400 hover:text-stone-600'}`}
+                      >
+                        <Repeat size={12} />
+                        Lançamento Recorrente
+                      </button>
+                    </div>
+
+                    <AnimatePresence>
+                      {(showRealizedFields || isRecurring) && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="overflow-hidden bg-stone-50/50 rounded-3xl border border-stone-100 p-6 space-y-6"
+                        >
+                          {showRealizedFields && (
+                            <div className="space-y-4">
+                              <div className="flex justify-between items-center">
+                                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-600">Pagamentos Realizados</p>
+                                <button 
+                                  type="button"
+                                  onClick={() => setTransPayments([...transPayments, { amount: '', date: new Date().toISOString().split('T')[0] }])}
+                                  className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-emerald-600 hover:text-emerald-700 transition-colors"
+                                >
+                                  <Plus size={10} />
+                                  Adicionar Pagamento
+                                </button>
+                              </div>
+                              <div className="space-y-3">
+                                {transPayments.map((payment, index) => (
+                                  <div key={index} className="grid grid-cols-2 gap-4 relative group/payment p-3 bg-white rounded-2xl border border-stone-100 shadow-sm transition-all hover:border-emerald-100">
+                                    <div className="space-y-1">
+                                      <label className="text-[8px] font-bold text-stone-400 uppercase">Valor Pago</label>
+                                      <input 
+                                        type="text" 
+                                        value={payment.amount}
+                                        onChange={(e) => {
+                                          const newPayments = [...transPayments];
+                                          newPayments[index].amount = maskCurrency(e.target.value);
+                                          setTransPayments(newPayments);
+                                        }}
+                                        placeholder="0,00"
+                                        className="w-full bg-transparent border-none p-0 text-sm font-semibold focus:ring-0"
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label className="text-[8px] font-bold text-stone-400 uppercase">Data Pagto</label>
+                                      <div className="flex items-center gap-2">
+                                        <input 
+                                          type="date" 
+                                          value={payment.date}
+                                          onChange={(e) => {
+                                            const newPayments = [...transPayments];
+                                            newPayments[index].date = e.target.value;
+                                            setTransPayments(newPayments);
+                                          }}
+                                          className="flex-1 bg-transparent border-none p-0 text-sm font-semibold focus:ring-0"
+                                        />
+                                        {transPayments.length > 1 && (
+                                          <button 
+                                            type="button"
+                                            onClick={() => setTransPayments(transPayments.filter((_, i) => i !== index))}
+                                            className="text-stone-300 hover:text-rose-500 transition-colors"
+                                          >
+                                            <Trash2 size={14} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {isRecurring && (
+                            <div className="space-y-4 pt-4 border-t border-stone-100">
+                              <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-stone-400">Configuração de Recorrência</p>
+                              
+                              <div className="space-y-4">
+                                <div className="flex flex-wrap gap-x-6 gap-y-3">
+                                  <label className="flex items-center gap-2 cursor-pointer group">
+                                    <input 
+                                      type="radio" 
+                                      name="recurrenceMode"
+                                      checked={recurrenceMode === 'continuous'} 
+                                      onChange={() => setRecurrenceMode('continuous')} 
+                                      className="accent-stone-900 w-4 h-4" 
+                                    />
+                                    <span className="text-[11px] text-stone-600 font-bold uppercase tracking-tight group-hover:text-stone-900">Recorrente</span>
+                                  </label>
+                                  <label className="flex items-center gap-2 cursor-pointer group">
+                                    <input 
+                                      type="radio" 
+                                      name="recurrenceMode"
+                                      checked={recurrenceMode === 'installments'} 
+                                      onChange={() => setRecurrenceMode('installments')} 
+                                      className="accent-stone-900 w-4 h-4" 
+                                    />
+                                    <span className="text-[11px] text-stone-600 font-bold uppercase tracking-tight group-hover:text-stone-900">Parcelado</span>
+                                  </label>
+                                </div>
+
+                                {recurrenceMode === 'continuous' && (
+                                  <div className="flex flex-wrap gap-x-4 gap-y-2 p-3 bg-white rounded-2xl border border-stone-100">
+                                    {[
+                                      { id: 'weekly', label: 'Semanal' },
+                                      { id: 'monthly', label: 'Mensal' },
+                                      { id: 'annually', label: 'Anual' }
+                                    ].map((freq) => (
+                                      <button
+                                        key={freq.id}
+                                        type="button"
+                                        onClick={() => setTransFrequency(freq.id as any)}
+                                        className={`px-4 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all ${transFrequency === freq.id ? 'bg-stone-900 border-stone-900 text-white' : 'bg-transparent border-stone-100 text-stone-400 hover:bg-stone-50'}`}
+                                      >
+                                        {freq.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              {recurrenceMode === 'installments' && (
+                                <div className="max-w-xs space-y-1">
+                                  <label className="text-[8px] font-bold text-stone-400 uppercase">Número de Parcelas</label>
+                                  <input 
+                                    type="number" 
+                                    value={installmentsCount} 
+                                    onChange={(e) => setInstallmentsCount(e.target.value)}
+                                    className="w-full bg-white border border-stone-200 rounded-xl py-2 px-4 text-sm font-semibold"
+                                    placeholder="Ex: 12"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <button 
+                      type="submit" 
+                      disabled={isSubmitting}
+                      className="w-full py-5 bg-stone-900 text-white rounded-[2rem] text-sm font-bold uppercase tracking-[0.2em] hover:bg-stone-800 shadow-2xl shadow-stone-200 transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3"
+                    >
+                      {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : (editingTransaction ? 'Atualizar Lançamento' : 'Confirmar Lançamento')}
+                    </button>
+                  </form>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
           {showCardDeleteModal && cardToDelete && (
             <motion.div 
               initial={{ opacity: 0 }}
@@ -3449,6 +3984,147 @@ export default function App() {
               </motion.div>
             </motion.div>
           )}
+
+          {showCategoryDeleteModal && categoryToDelete && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md"
+              onClick={(e) => e.target === e.currentTarget && setShowCategoryDeleteModal(false)}
+            >
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5"
+              >
+                <div className="p-8 text-center">
+                  <div className={`w-16 h-16 ${isCategoryInUse ? 'bg-amber-50 text-amber-500' : 'bg-rose-50 text-rose-500'} rounded-2xl flex items-center justify-center mx-auto mb-6`}>
+                    {isCategoryInUse ? <AlertCircle size={32} /> : <Trash2 size={32} />}
+                  </div>
+                  <h3 className="text-xl font-bold text-stone-900 tracking-tight">Excluir Categoria?</h3>
+                  <p className="text-sm text-stone-500 mt-2 leading-relaxed">
+                    Você está prestes a excluir a categoria <span className="font-semibold text-stone-900">"{categoryToDelete.name}"</span>.
+                  </p>
+                  
+                  {isCategoryInUse && (
+                    <div className="mt-4 p-4 bg-amber-50 rounded-2xl border border-amber-100/50">
+                      <p className="text-xs text-amber-700 leading-relaxed font-medium">
+                        Esta categoria está sendo usada em lançamentos existentes. Se você excluí-la, os lançamentos continuarão existindo, mas sem uma categoria vinculada no gerenciador.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="mt-8 grid grid-cols-2 gap-3">
+                    <button 
+                      onClick={() => setShowCategoryDeleteModal(false)}
+                      className="w-full py-4 bg-white border border-stone-200 text-stone-900 rounded-2xl text-sm font-bold hover:bg-stone-50 transition-all active:scale-95"
+                    >
+                      Cancelar
+                    </button>
+                    <button 
+                      onClick={confirmDeleteCategory}
+                      className={`w-full py-4 ${isCategoryInUse ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'} text-white rounded-2xl text-sm font-bold transition-all shadow-xl active:scale-95`}
+                    >
+                      Confirmar
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {showBulkDeleteModal && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md"
+              onClick={(e) => e.target === e.currentTarget && setShowBulkDeleteModal(false)}
+            >
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5"
+              >
+                <div className="p-8 text-center">
+                  <div className="w-16 h-16 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                    <Trash2 size={32} />
+                  </div>
+                  <h3 className="text-xl font-bold text-stone-900 tracking-tight">Excluir em Lote?</h3>
+                  <p className="text-sm text-stone-500 mt-2 leading-relaxed">
+                    Você selecionou <span className="font-bold text-rose-600">{selectedTransactions.length}</span> lançamentos para excluir. Esta ação não poderá ser desfeita.
+                  </p>
+                  
+                  <div className="mt-8 grid grid-cols-2 gap-3">
+                    <button 
+                      disabled={isBulkSubmitting}
+                      onClick={() => setShowBulkDeleteModal(false)}
+                      className="w-full py-4 bg-white border border-stone-200 text-stone-900 rounded-2xl text-sm font-bold hover:bg-stone-50 transition-all active:scale-95 disabled:opacity-50"
+                    >
+                      Voltar
+                    </button>
+                    <button 
+                      disabled={isBulkSubmitting}
+                      onClick={confirmBulkDelete}
+                      className="w-full py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-sm font-bold transition-all shadow-xl shadow-rose-200 active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      {isBulkSubmitting && <Loader2 size={16} className="animate-spin" />}
+                      {isBulkSubmitting ? 'Excluindo...' : 'Confirmar'}
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {/* Bulk Action Toolbar */}
+          <AnimatePresence>
+            {selectedTransactions.length > 0 && activeTab === 'transactions' && (
+              <motion.div
+                initial={{ y: 50, opacity: 0, x: '-50%', scale: 0.95 }}
+                animate={{ y: 0, opacity: 1, x: '-50%', scale: 1 }}
+                exit={{ y: 50, opacity: 0, x: '-50%', scale: 0.95 }}
+                className="fixed bottom-28 left-1/2 z-[100] w-full max-w-sm sm:max-w-md px-4"
+              >
+                <div className="bg-stone-900/90 text-white p-2.5 rounded-3xl shadow-2xl flex items-center justify-between border border-white/10 backdrop-blur-xl ring-1 ring-white/10">
+                  <div className="flex items-center gap-3 ml-3">
+                    <div className="w-8 h-8 rounded-2xl bg-emerald-500 shadow-lg shadow-emerald-500/20 flex items-center justify-center text-[10px] font-black">
+                      {selectedTransactions.length}
+                    </div>
+                    <p className="text-[10px] font-bold tracking-tight uppercase opacity-80">Selecionados</p>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button 
+                      onClick={() => setSelectedTransactions([])}
+                      className="h-9 px-3 hover:bg-white/10 rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-colors"
+                    >
+                      Limpar
+                    </button>
+                    <button 
+                      disabled={isBulkSubmitting}
+                      onClick={handleBulkQuitar}
+                      className="h-9 px-4 bg-emerald-500 hover:bg-emerald-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                    >
+                      {isBulkSubmitting ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                      Quitar
+                    </button>
+                    <button 
+                      disabled={isBulkSubmitting}
+                      onClick={handleBulkDeleteRequest}
+                      className="h-9 px-4 bg-rose-500 hover:bg-rose-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg shadow-rose-500/20"
+                    >
+                      {isBulkSubmitting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </AnimatePresence>
 
       </main>

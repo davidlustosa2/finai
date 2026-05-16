@@ -6,13 +6,14 @@ import {
   signOut, 
   User 
 } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { auth, firebaseDebugInfo, checkConnectivity } from '../lib/firebase';
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
+  connectionError: string | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -20,11 +21,24 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       setLoading(false);
+      
+      if (user) {
+        // Perform a quick connectivity check
+        checkConnectivity().then(status => {
+          if (!status.ok && status.code !== 'permission-denied') {
+            console.error("Firebase connection issue:", status.message);
+            setConnectionError(`Conexão com Firebase falhou (${status.code}). Verifique se o Database ID "${firebaseDebugInfo.databaseId}" está correto no projeto "${firebaseDebugInfo.projectId}".`);
+          } else {
+            setConnectionError(null);
+          }
+        });
+      }
     });
     return unsubscribe;
   }, []);
@@ -47,7 +61,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signInWithGoogle, logout }}>
+    <AuthContext.Provider value={{ user, loading, signInWithGoogle, logout, connectionError }}>
       {children}
     </AuthContext.Provider>
   );

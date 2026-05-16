@@ -1,5 +1,6 @@
 {
   "name": "FinAI - Finanças Inteligentes",
   "description": "Solução inteligente de finanças pessoais com interface minimalista, API-first e integração via WhatsApp.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

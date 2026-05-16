@@ -10,7 +10,8 @@ import {
   where, 
   orderBy,
   serverTimestamp,
-  Transaction as FirestoreTransaction 
+  Transaction as FirestoreTransaction,
+  writeBatch
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 
@@ -21,6 +22,7 @@ export enum OperationType {
   LIST = 'list',
   GET = 'get',
   WRITE = 'write',
+  BATCH = 'batch',
 }
 
 export interface FirestoreErrorInfo {
@@ -72,12 +74,25 @@ function cleanData(data: any) {
 }
 
 export const firestoreService = {
-  async getTransactions() {
-    const uid = auth.currentUser?.uid;
+  async batchUpdateCategories(items: { id: string, data: any }[]) {
+    try {
+      const batch = writeBatch(db);
+      items.forEach(item => {
+        const docRef = doc(db, 'categories', item.id);
+        batch.update(docRef, cleanData(item.data));
+      });
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.BATCH, 'categories');
+    }
+  },
+
+  async getTransactions(uidOverride?: string) {
+    const uid = uidOverride || auth.currentUser?.uid;
     if (!uid) return [];
     const path = 'transactions';
     try {
-      const q = query(collection(db, path), where('uid', '==', uid), orderBy('date', 'desc'));
+      const q = query(collection(db, path), where('uid', '==', uid));
       const snapshot = await getDocs(q);
       return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } catch (error) {
@@ -125,8 +140,8 @@ export const firestoreService = {
     }
   },
 
-  async getAccounts() {
-    const uid = auth.currentUser?.uid;
+  async getAccounts(uidOverride?: string) {
+    const uid = uidOverride || auth.currentUser?.uid;
     if (!uid) return [];
     const path = 'accounts';
     try {
@@ -151,8 +166,8 @@ export const firestoreService = {
      }
   },
 
-  async getCards() {
-    const uid = auth.currentUser?.uid;
+  async getCards(uidOverride?: string) {
+    const uid = uidOverride || auth.currentUser?.uid;
     if (!uid) return [];
     const path = 'cards';
     try {
@@ -165,8 +180,8 @@ export const firestoreService = {
     }
   },
 
-  async getCategories() {
-    const uid = auth.currentUser?.uid;
+  async getCategories(uidOverride?: string) {
+    const uid = uidOverride || auth.currentUser?.uid;
     if (!uid) return [];
     const path = 'categories';
     try {
