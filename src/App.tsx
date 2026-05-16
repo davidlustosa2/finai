@@ -240,6 +240,8 @@ export default function App() {
   const [installmentsCount, setInstallmentsCount] = useState('3');
   const [categorySearch, setCategorySearch] = useState('');
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  const [accountSearch, setAccountSearch] = useState('');
+  const [showAccountDropdown, setShowAccountDropdown] = useState(false);
   const [showManageCategoriesModal, setShowManageCategoriesModal] = useState(false);
   const [editingCategoryInModal, setEditingCategoryInModal] = useState<{name: string, type: string} | null>(null);
   const [newCategoryNameInModal, setNewCategoryNameInModal] = useState('');
@@ -715,7 +717,22 @@ export default function App() {
 
     try {
       if (editingTransaction) {
-        await firestoreService.updateTransaction(editingTransaction.id.toString(), payload);
+        const wasRecurring = !!(editingTransaction.recurringGroup || editingTransaction.installmentGroup);
+        const willBeRecurring = isRecurring && (recurrenceMode === 'continuous' || parseInt(installmentsCount) > 1);
+
+        if (willBeRecurring && !wasRecurring) {
+          // Converting single to recurring/installments
+          const newSeries = createRecurringOrInstallments({ ...payload, uid: user.uid });
+          const [first, ...rest] = newSeries;
+          
+          await firestoreService.updateTransaction(editingTransaction.id.toString(), first);
+          for (const t of rest) {
+            await firestoreService.addTransaction(t);
+          }
+        } else {
+          // Standard update (single to single, or updating one in a series)
+          await firestoreService.updateTransaction(editingTransaction.id.toString(), payload);
+        }
       } else {
         const newTransactions = createRecurringOrInstallments({ ...payload, uid: user.uid });
         console.log("Transformed transactions:", newTransactions);
@@ -809,8 +826,14 @@ export default function App() {
     setIsRecurring(!!(t.recurringGroup || t.installmentGroup));
     if (t.installmentGroup) {
       setRecurrenceMode('installments');
+      if ((t as any).totalInstallments) {
+        setInstallmentsCount((t as any).totalInstallments.toString());
+      }
     } else if (t.recurringGroup) {
       setRecurrenceMode('continuous');
+      if ((t as any).recurringFrequency) {
+        setTransFrequency((t as any).recurringFrequency);
+      }
     }
     setShowNewTransactionForm(true);
   };
@@ -2258,17 +2281,137 @@ export default function App() {
                             )}
                           </AnimatePresence>
                         </div>
-                        <div>
+                        <div className="relative">
                           <label className="text-xs font-medium text-stone-400 uppercase tracking-wider block mb-1">Conta/Cartão</label>
-                          <select 
-                            value={transAccount}
-                            onChange={(e) => setTransAccount(e.target.value)}
-                            className="w-full bg-transparent border-none rounded-none py-2 px-0 outline-none focus:ring-0 text-stone-600 font-medium transition-all appearance-none cursor-pointer"
+                          <button 
+                            type="button"
+                            onClick={() => setShowAccountDropdown(!showAccountDropdown)}
+                            className="w-full flex items-center justify-between py-2 text-stone-600 font-medium transition-all group"
                           >
-                            {summary?.accounts.map(acc => <option key={acc.id} value={acc.name}>{acc.name}</option>)}
-                            {cards.map(card => <option key={card.id} value={card.name}>{card.name}</option>)}
-                          </select>
+                            <div className="flex items-center gap-3">
+                              {(() => {
+                                const selectedAcc = cards.find(c => c.name === transAccount);
+                                if (!selectedAcc) return <Wallet size={16} className="text-stone-300" />;
+                                
+                                const logoDomain = selectedAcc.type === 'credit' 
+                                  ? (CARD_BRANDS.find(b => b.id === selectedAcc.brand)?.logo || selectedAcc.bankLogo || getAutoLogo(selectedAcc.name))
+                                  : (selectedAcc.bankLogo || getAutoLogo(selectedAcc.name));
+                                
+                                if (logoDomain) {
+                                  return (
+                                    <div className="w-6 h-6 bg-stone-50 rounded-lg flex items-center justify-center border border-stone-100 overflow-hidden shrink-0">
+                                      <img 
+                                        src={getCardLogoUrl(logoDomain)} 
+                                        alt="" 
+                                        className="w-4 h-4 object-contain"
+                                        referrerPolicy="no-referrer"
+                                      />
+                                    </div>
+                                  );
+                                }
+                                return selectedAcc.type === 'bank' ? <Wallet size={16} className="text-stone-300" /> : <CreditCard size={16} className="text-stone-300" />;
+                              })()}
+                              <span>{transAccount}</span>
+                            </div>
+                            <ChevronDown size={14} className={`text-stone-300 transition-transform ${showAccountDropdown ? 'rotate-180' : ''}`} />
+                          </button>
                           <div className="h-px bg-stone-100 w-full" />
+
+                          <AnimatePresence>
+                            {showAccountDropdown && (
+                              <motion.div 
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 10 }}
+                                className="absolute z-50 left-0 right-0 top-full mt-2 bg-white rounded-2xl shadow-xl border border-black/5 p-4 space-y-4"
+                              >
+                                <div className="flex items-center gap-2 bg-stone-50 rounded-xl px-3 py-2">
+                                  <Search size={14} className="text-stone-400" />
+                                  <input 
+                                    type="text" 
+                                    value={accountSearch}
+                                    onChange={(e) => setAccountSearch(e.target.value)}
+                                    placeholder="Pesquisar conta..."
+                                    className="bg-transparent border-none outline-none text-sm w-full"
+                                    autoFocus
+                                  />
+                                </div>
+                                <div className="max-h-60 overflow-y-auto space-y-4">
+                                  {/* Contas Correntes */}
+                                  {cards.filter(c => c.type === 'bank' && c.name.toLowerCase().includes(accountSearch.toLowerCase())).length > 0 && (
+                                    <div className="space-y-1">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest px-3 mb-2">Contas Correntes</p>
+                                      {cards
+                                        .filter(c => c.type === 'bank' && c.name.toLowerCase().includes(accountSearch.toLowerCase()))
+                                        .map(acc => {
+                                          const logoDomain = acc.bankLogo || getAutoLogo(acc.name);
+                                          return (
+                                            <button 
+                                              key={acc.id}
+                                              type="button"
+                                              onClick={() => {
+                                                setTransAccount(acc.name);
+                                                setShowAccountDropdown(false);
+                                                setAccountSearch('');
+                                              }}
+                                              className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm hover:bg-stone-50 transition-colors group"
+                                            >
+                                              <div className="w-8 h-8 bg-white border border-stone-100 rounded-lg flex items-center justify-center overflow-hidden shrink-0 shadow-sm group-hover:scale-110 transition-transform">
+                                                {logoDomain ? (
+                                                  <img src={getCardLogoUrl(logoDomain)} alt="" className="w-5 h-5 object-contain" />
+                                                ) : (
+                                                  <Wallet size={16} className="text-stone-300" />
+                                                )}
+                                              </div>
+                                              <div className="text-left">
+                                                <p className="font-bold text-stone-900 leading-tight">{acc.name}</p>
+                                                <p className="text-[9px] text-stone-400 uppercase font-bold tracking-tighter">Saldo R$ {acc.used.toLocaleString('pt-BR')}</p>
+                                              </div>
+                                            </button>
+                                          );
+                                        })}
+                                    </div>
+                                  )}
+
+                                  {/* Cartões de Crédito */}
+                                  {cards.filter(c => c.type === 'credit' && c.name.toLowerCase().includes(accountSearch.toLowerCase())).length > 0 && (
+                                    <div className="space-y-1">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest px-3 mb-2">Cartões de Crédito</p>
+                                      {cards
+                                        .filter(c => c.type === 'credit' && c.name.toLowerCase().includes(accountSearch.toLowerCase()))
+                                        .map(card => {
+                                          const logoDomain = CARD_BRANDS.find(b => b.id === card.brand)?.logo || card.bankLogo || getAutoLogo(card.name);
+                                          return (
+                                            <button 
+                                              key={card.id}
+                                              type="button"
+                                              onClick={() => {
+                                                setTransAccount(card.name);
+                                                setShowAccountDropdown(false);
+                                                setAccountSearch('');
+                                              }}
+                                              className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm hover:bg-stone-50 transition-colors group"
+                                            >
+                                              <div className="w-8 h-8 bg-white border border-stone-100 rounded-lg flex items-center justify-center overflow-hidden shrink-0 shadow-sm group-hover:scale-110 transition-transform">
+                                                {logoDomain ? (
+                                                  <img src={getCardLogoUrl(logoDomain)} alt="" className="w-5 h-5 object-contain" />
+                                                ) : (
+                                                  <CreditCard size={16} className="text-stone-300" />
+                                                )}
+                                              </div>
+                                              <div className="text-left">
+                                                <p className="font-bold text-stone-900 leading-tight">{card.name}</p>
+                                                <p className="text-[9px] text-stone-400 uppercase font-bold tracking-tighter">Limite Disp. R$ {(card.limit - card.used).toLocaleString('pt-BR')}</p>
+                                              </div>
+                                            </button>
+                                          );
+                                        })}
+                                    </div>
+                                  )}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
 
                         <div className="pt-2">
@@ -2615,9 +2758,16 @@ export default function App() {
                               onChange={(e) => setFilterAccount(e.target.value)}
                             >
                               <option value="all">Todas as Contas</option>
-                              {Array.from(new Set(transactions.map(t => t.account))).map(acc => (
-                                <option key={acc} value={acc}>{acc}</option>
-                              ))}
+                              <optgroup label="Contas Correntes">
+                                {cards.filter(c => c.type === 'bank').map(acc => (
+                                  <option key={acc.id} value={acc.name}>{acc.name}</option>
+                                ))}
+                              </optgroup>
+                              <optgroup label="Cartões de Crédito">
+                                {cards.filter(c => c.type === 'credit').map(card => (
+                                  <option key={card.id} value={card.name}>{card.name}</option>
+                                ))}
+                              </optgroup>
                             </select>
                           </div>
 

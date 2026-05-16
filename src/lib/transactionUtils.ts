@@ -6,7 +6,7 @@ export const addDate = (d: Date, idx: number, freq: 'monthly' | 'weekly' | 'none
 };
 
 export const createRecurringOrInstallments = (baseData: any) => {
-  const { date, installments, frequency, isRecurring, description, amount, type, category, account, uid } = baseData;
+  const { date, installments, frequency, isRecurring, uid, ...others } = baseData;
   const baseDate = new Date(date || new Date());
   const newTransactions: any[] = [];
 
@@ -14,15 +14,15 @@ export const createRecurringOrInstallments = (baseData: any) => {
     const group = Date.now();
     for (let i = 0; i < installments; i++) {
       newTransactions.push({
+        ...others,
         uid,
-        description: description,
-        amount: amount, 
-        type,
-        category,
-        account,
         date: addDate(baseDate, i, 'monthly'),
         installmentGroup: group,
-        settled: false
+        installmentSequence: i + 1,
+        totalInstallments: installments,
+        // Only the first one keeps the payments/settled status if it was realized
+        payments: i === 0 ? others.payments : undefined,
+        settled: i === 0 ? (others.settled || false) : false
       });
     }
   } else if (isRecurring) {
@@ -30,24 +30,23 @@ export const createRecurringOrInstallments = (baseData: any) => {
     const recurringGroup = Date.now();
     for (let i = 0; i < count; i++) {
       newTransactions.push({
+        ...others,
         uid,
-        description: description,
-        amount: amount,
-        type,
-        category,
-        account,
         date: addDate(baseDate, i, frequency || 'monthly'),
         isRecurringEntry: true,
         recurringGroup,
-        settled: false
+        recurringFrequency: frequency || 'monthly',
+        // Only the first one keeps the payments/settled status
+        payments: i === 0 ? others.payments : undefined,
+        settled: i === 0 ? (others.settled || false) : false
       });
     }
   } else {
     newTransactions.push({
+      ...others,
       uid,
-      ...baseData,
       date: baseDate.toISOString(),
-      settled: baseData.settled || false
+      settled: others.settled || false
     });
   }
   return newTransactions;
