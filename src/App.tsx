@@ -298,6 +298,7 @@ export default function App() {
   const [transactionToQuitar, setTransactionToQuitar] = useState<Transaction | null>(null);
 
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [showBulkAccountModal, setShowBulkAccountModal] = useState(false);
   const [selectedTransactions, setSelectedTransactions] = useState<string[]>([]);
   const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
 
@@ -414,6 +415,40 @@ export default function App() {
   const handleBulkDeleteRequest = () => {
     if (selectedTransactions.length > 0) {
       setShowBulkDeleteModal(true);
+    }
+  };
+
+  const handleBulkAccountRequest = () => {
+    if (selectedTransactions.length > 0) {
+      setShowBulkAccountModal(true);
+    }
+  };
+
+  const confirmBulkAccountChange = async (cardId: string, cardName: string) => {
+    if (selectedTransactions.length === 0 || !user) return;
+    setIsBulkSubmitting(true);
+    try {
+      for (const id of selectedTransactions) {
+        const t = transactions.find(trans => trans.id.toString() === id);
+        if (t) {
+          const { id: _, ...updateData } = t;
+          await firestoreService.updateTransaction(id, {
+            ...updateData,
+            cardId,
+            cardName,
+            account: cardName
+          });
+        }
+      }
+      setSuccessMessage(`${selectedTransactions.length} lançamentos reatribuídos para ${cardName}!`);
+      setSelectedTransactions([]);
+      setShowBulkAccountModal(false);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      setErrorMessage("Erro ao alterar conta em lote.");
+    } finally {
+      setIsBulkSubmitting(false);
     }
   };
 
@@ -548,17 +583,28 @@ export default function App() {
         (t.account || '').toLowerCase().trim() === (card.name || '').toLowerCase().trim()
       );
       
-      const totalIncome = cardTransactions
-        .filter(t => t.type === 'income')
-        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-        
-      const totalExpense = cardTransactions
-        .filter(t => t.type === 'expense')
-        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-      
-      // Both bank and credit use the same logic for "Available Value"
-      // Balance/Available = Initial/Limit + Income - Expense
-      const computedValue = (Number(card.limit) || 0) + totalIncome - totalExpense;
+      let computedValue;
+      if (card.type === 'bank') {
+        const totalRealizedIncome = cardTransactions
+          .filter(t => t.type === 'income')
+          .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+          
+        const totalRealizedExpense = cardTransactions
+          .filter(t => t.type === 'expense')
+          .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+          
+        computedValue = (Number(card.limit) || 0) + totalRealizedIncome - totalRealizedExpense;
+      } else {
+        const totalIncome = cardTransactions
+          .filter(t => t.type === 'income')
+          .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+          
+        const totalExpense = cardTransactions
+          .filter(t => t.type === 'expense')
+          .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+          
+        computedValue = (Number(card.limit) || 0) + totalIncome - totalExpense;
+      }
       
       return {
         ...card,
@@ -590,6 +636,19 @@ export default function App() {
       console.log("Fetched cards count:", (cardsData as any[])?.length || 0);
       
       const transactionsRaw = (transactionsData as any[]) || [];
+      
+      // Perform automated migration to replace any transaction's account from 'Itaú David' to 'Conta Itaú David'
+      const legacyTransactions = transactionsRaw.filter(t => t.account === 'Itaú David');
+      if (legacyTransactions.length > 0) {
+        console.log(`Migrating ${legacyTransactions.length} legacy transactions from 'Itaú David' to 'Conta Itaú David'`);
+        await Promise.all(legacyTransactions.map(t => 
+          firestoreService.updateTransaction(t.id, { account: 'Conta Itaú David' })
+        ));
+        legacyTransactions.forEach(t => {
+          t.account = 'Conta Itaú David';
+        });
+      }
+
       const cardsRaw = (cardsData as any[]) || [];
       const accountsRaw = (accountsRawData as any[]) || [];
       const categoriesRaw = (categoriesData as any[]) || [];
@@ -619,14 +678,11 @@ export default function App() {
       const totalRealizedExpense = transactionsRaw.filter(t => t.type === 'expense').reduce((acc, t) => acc + calculateRealizedAmount(t), 0);
       const realizedBalance = totalInitialBalance + totalRealizedIncome - totalRealizedExpense;
 
-      // Calculate categories: Use persistent if they exist, otherwise use defaults
-      const rawMergedCategories = categoriesRaw.length > 0 
-        ? [...categoriesRaw]
-        : [...DEFAULT_CATEGORIES];
+      const rawMergedCategories = [...DEFAULT_CATEGORIES, ...categoriesRaw];
 
       // Deduplicate categories by name and type
       const mergedCategories = Array.from(
-        new Map(rawMergedCategories.map(c => [`${c.type}-${c.name}`, c])).values()
+        new Map(rawMergedCategories.map(c => [`${String(c.type)}-${String(c.name)}`, c])).values()
       ).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
 
       const summaryData: Summary = {
@@ -636,25 +692,42 @@ export default function App() {
         realizedBalance,
         realizedIncome: totalRealizedIncome,
         realizedExpense: totalRealizedExpense,
-        accounts: unifiedCards.filter(c => c.type === 'bank').map(c => ({
-          ...c,
-          balance: (Number(c.limit) || 0)
-        })),
+        accounts: unifiedCards.filter(c => c.type === 'bank').map(c => {
+          const cardTransactions = transactionsRaw.filter(t => 
+            (t.account || '').toLowerCase().trim() === (c.name || '').toLowerCase().trim()
+          );
+          const totalRealizedIncome = cardTransactions
+            .filter(t => t.type === 'income')
+            .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+          const totalRealizedExpense = cardTransactions
+            .filter(t => t.type === 'expense')
+            .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+          return {
+            ...c,
+            balance: (Number(c.limit) || 0) + totalRealizedIncome - totalRealizedExpense
+          };
+        }),
         cards: unifiedCards,
         categories: mergedCategories
       };
       
       setSummary(summaryData);
       
-      // Deduplicate transactions by ID
+      // Deduplicate transactions by ID string
       const uniqueTransactions = Array.from(
-        new Map(transactionsRaw.map(t => [t.id, t])).values()
+        new Map(transactionsRaw.map(t => [String(t.id), t])).values()
       ).sort((a: any, b: any) => {
         return new Date(b.date).getTime() - new Date(a.date).getTime();
       }) as Transaction[];
       
       setTransactions(uniqueTransactions);
-      setCards(unifiedCards);
+      
+      // Deduplicate cards by ID string
+      const deduplicatedCards = Array.from(
+        new Map(unifiedCards.map(c => [String(c.id), c])).values()
+      ) as CardData[];
+      
+      setCards(deduplicatedCards);
 
       // Reset filters if no data in current month but data exists elsewhere
       if (uniqueTransactions.length > 0 && !showAllMonths) {
@@ -1563,6 +1636,7 @@ export default function App() {
       <AnimatePresence>
         {(successMessage || errorMessage) && (
           <motion.div 
+            key="global-alert"
             initial={{ y: -100, opacity: 0 }}
             animate={{ y: 20, opacity: 1 }}
             exit={{ y: -100, opacity: 0 }}
@@ -1634,6 +1708,7 @@ export default function App() {
             <AnimatePresence>
               {isSearchOpen && (
                 <motion.div
+                  key="search-bar"
                   initial={{ width: 0, opacity: 0 }}
                   animate={{ width: 240, opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
@@ -1714,12 +1789,24 @@ export default function App() {
                       Isso pode afetar o cálculo dos saldos. Edite-os na aba de Lançamentos.
                     </p>
                   </div>
-                  <button 
-                    onClick={() => { setActiveTab('transactions'); setFilterText('órfão'); }}
-                    className="ml-auto px-4 py-2 bg-amber-200/50 hover:bg-amber-200 rounded-xl text-xs font-bold transition-all"
-                  >
-                    Ver Lançamentos
-                  </button>
+                  <div className="ml-auto flex items-center gap-2">
+                    <button 
+                      onClick={() => { setActiveTab('transactions'); setFilterText('órfão'); }}
+                      className="px-4 py-2 bg-amber-200/50 hover:bg-amber-200 rounded-xl text-xs font-bold transition-all"
+                    >
+                      Ver Lançamentos
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const ids = orphanedTransactions.map(t => t.id.toString());
+                        setSelectedTransactions(ids);
+                        setShowBulkAccountModal(true);
+                      }}
+                      className="px-4 py-2 bg-amber-900 text-white hover:bg-amber-800 rounded-xl text-xs font-bold transition-all shadow-lg shadow-amber-200"
+                    >
+                      Corrigir em Lote
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -2009,8 +2096,9 @@ export default function App() {
 
               <AnimatePresence>
                 {showNewCardForm && (
-                  <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                  <div className="fixed inset-0 z-[100] flex items-center justify-center p-6" key="card-form-container">
                     <motion.div 
+                      key="modal-overlay"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
@@ -2018,6 +2106,7 @@ export default function App() {
                       className="absolute inset-0 bg-stone-900/40 backdrop-blur-sm"
                     />
                     <motion.div 
+                      key="modal-content"
                       initial={{ opacity: 0, scale: 0.9, y: 20 }}
                       animate={{ opacity: 1, scale: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -2702,6 +2791,7 @@ export default function App() {
                 <AnimatePresence>
                   {showFilterRow && (
                     <motion.div
+                      key="filters"
                       initial={{ opacity: 0, y: -10, height: 0 }}
                       animate={{ opacity: 1, y: 0, height: 'auto' }}
                       exit={{ opacity: 0, y: -10, height: 0 }}
@@ -3028,21 +3118,23 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {showManageCategoriesModal && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm"
-              onClick={(e) => e.target === e.currentTarget && setShowManageCategoriesModal(false)}
-            >
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className="bg-white w-full max-w-3xl rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5"
-              >
+            <AnimatePresence>
+              {showManageCategoriesModal && (
+                <div key="categories-modal-root" className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && setShowManageCategoriesModal(false)}>
+                  <motion.div 
+                    key="categories-modal-overlay"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 bg-stone-900/10"
+                  />
+                  <motion.div 
+                    key="categories-modal-body"
+                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                    className="bg-white w-full max-w-3xl rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5 relative"
+                  >
                 <div className="p-8 border-b border-stone-100 flex justify-between items-center bg-stone-50/30">
                   <div>
                     <h3 className="font-semibold text-xl tracking-tight text-stone-900">Gerenciar Categorias</h3>
@@ -3105,8 +3197,9 @@ export default function App() {
                             >
                               {summary?.categories.filter(c => c.type === 'expense').map((c, index) => {
                                 const DraggableAny = Draggable as any;
+                                const compKey = `expense-${c.name}-${index}`;
                                 return (
-                                  <DraggableAny key={`${c.type}-${c.name}`} draggableId={`${c.type}-${c.name}`} index={index}>
+                                  <DraggableAny key={compKey} draggableId={compKey} index={index}>
                                     {(provided: any, snapshot: any) => (
                                       <div 
                                         ref={provided.innerRef}
@@ -3217,8 +3310,9 @@ export default function App() {
                               >
                                 {summary?.categories.filter(c => c.type === 'income').map((c, index) => {
                                   const DraggableAny = Draggable as any;
+                                  const compKey = `income-${c.name}-${index}`;
                                   return (
-                                    <DraggableAny key={`${c.type}-${c.name}`} draggableId={`${c.type}-${c.name}`} index={index}>
+                                    <DraggableAny key={compKey} draggableId={compKey} index={index}>
                                       {(provided: any, snapshot: any) => (
                                         <div 
                                           ref={provided.innerRef}
@@ -3290,17 +3384,18 @@ export default function App() {
                   </button>
                 </div>
               </motion.div>
-            </motion.div>
+            </div>
           )}
         </AnimatePresence>
 
         <AnimatePresence>
           {showSettleModal && settlingTransaction && (
-            <div className="fixed inset-0 z-[1000] pointer-events-auto">
+            <div className="fixed inset-0 z-[1000] pointer-events-auto" key="settle-modal-root">
               {/* Overlay to detect outside clicks */}
               <div className="absolute inset-0 bg-black/5" onClick={() => setShowSettleModal(false)} />
               
               <motion.div 
+                key="settle-modal-content"
                 initial={{ opacity: 0, x: 20, scale: 0.9 }}
                 animate={{ opacity: 1, x: 0, scale: 1 }}
                 exit={{ opacity: 0, x: 20, scale: 0.9 }}
@@ -3368,6 +3463,7 @@ export default function App() {
         <AnimatePresence>
           {showQuitarWarning && transactionToQuitar && (
             <motion.div 
+              key="quitar-warning-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -3375,6 +3471,7 @@ export default function App() {
               onClick={(e) => e.target === e.currentTarget && setShowQuitarWarning(false)}
             >
               <motion.div 
+                key="quitar-warning-box"
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -3427,6 +3524,7 @@ export default function App() {
         <AnimatePresence>
           {showDeleteModal && transactionToDelete && (
             <motion.div 
+              key="delete-modal-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -3434,6 +3532,7 @@ export default function App() {
               onClick={(e) => e.target === e.currentTarget && setShowDeleteModal(false)}
             >
               <motion.div 
+                key="delete-modal-box"
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -3486,6 +3585,7 @@ export default function App() {
 
           {showNewTransactionForm && (
             <motion.div 
+              key="transaction-form-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -3493,6 +3593,7 @@ export default function App() {
               onClick={(e) => e.target === e.currentTarget && resetTransForm()}
             >
               <motion.div 
+                key="transaction-form-box"
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -3515,6 +3616,7 @@ export default function App() {
                     <AnimatePresence>
                       {errorMessage && (
                         <motion.div 
+                          key="form-error"
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: 'auto' }}
                           exit={{ opacity: 0, height: 0 }}
@@ -3525,6 +3627,7 @@ export default function App() {
                       )}
                       {successMessage && (
                         <motion.div 
+                          key="form-success"
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: 'auto' }}
                           exit={{ opacity: 0, height: 0 }}
@@ -3608,6 +3711,7 @@ export default function App() {
                         <AnimatePresence>
                           {showCategoryDropdown && (
                             <motion.div 
+                              key="category-dropdown"
                               initial={{ opacity: 0, y: 10 }}
                               animate={{ opacity: 1, y: 0 }}
                               exit={{ opacity: 0, y: 10 }}
@@ -3689,6 +3793,7 @@ export default function App() {
                         <AnimatePresence>
                           {showAccountDropdown && (
                             <motion.div 
+                              key="account-dropdown"
                               initial={{ opacity: 0, y: -10 }}
                               animate={{ opacity: 1, y: 0 }}
                               exit={{ opacity: 0, y: 10 }}
@@ -3799,6 +3904,7 @@ export default function App() {
                     <AnimatePresence>
                       {(showRealizedFields || isRecurring) && (
                         <motion.div 
+                          key="expanded-options"
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: 'auto' }}
                           exit={{ opacity: 0, height: 0 }}
@@ -3944,6 +4050,7 @@ export default function App() {
 
           {showCardDeleteModal && cardToDelete && (
             <motion.div 
+              key="card-delete-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -3951,6 +4058,7 @@ export default function App() {
               onClick={(e) => e.target === e.currentTarget && setShowCardDeleteModal(false)}
             >
               <motion.div 
+                key="card-delete-box"
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -3987,6 +4095,7 @@ export default function App() {
 
           {showCategoryDeleteModal && categoryToDelete && (
             <motion.div 
+              key="category-delete-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -3994,6 +4103,7 @@ export default function App() {
               onClick={(e) => e.target === e.currentTarget && setShowCategoryDeleteModal(false)}
             >
               <motion.div 
+                key="category-delete-box"
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -4037,6 +4147,7 @@ export default function App() {
 
           {showBulkDeleteModal && (
             <motion.div 
+              key="bulk-delete-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -4044,6 +4155,7 @@ export default function App() {
               onClick={(e) => e.target === e.currentTarget && setShowBulkDeleteModal(false)}
             >
               <motion.div 
+                key="bulk-delete-box"
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -4080,42 +4192,115 @@ export default function App() {
             </motion.div>
           )}
 
+          {showBulkAccountModal && (
+            <motion.div 
+              key="bulk-account-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md"
+              onClick={(e) => e.target === e.currentTarget && setShowBulkAccountModal(false)}
+            >
+              <motion.div 
+                key="bulk-account-box"
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden border border-black/5"
+              >
+                <div className="p-8">
+                  <div className="text-center mb-6">
+                    <div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                      <Landmark size={32} />
+                    </div>
+                    <h3 className="text-xl font-bold text-stone-900 tracking-tight">Reatribuir Conta</h3>
+                    <p className="text-sm text-stone-500 mt-2 leading-relaxed">
+                      Mudar a conta de <span className="font-bold text-blue-600">{selectedTransactions.length}</span> lançamentos. Escolha a nova conta abaixo:
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 max-h-60 overflow-y-auto px-1 custom-scrollbar">
+                    {cards.map((card) => (
+                      <button
+                        key={card.id}
+                        disabled={isBulkSubmitting}
+                        onClick={() => confirmBulkAccountChange(card.id, card.name)}
+                        className="w-full p-4 rounded-2xl border border-stone-100 hover:border-blue-200 hover:bg-blue-50/50 transition-all flex items-center justify-between group disabled:opacity-50"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-lg`} style={{ backgroundColor: card.color }}>
+                            {card.type === 'bank' ? <Landmark size={18} /> : <CreditCard size={18} />}
+                          </div>
+                          <div className="text-left">
+                            <p className="text-sm font-bold text-stone-900 leading-none mb-1">{card.name}</p>
+                            <p className="text-[10px] text-stone-400 uppercase tracking-widest font-medium">
+                              {card.type === 'bank' ? 'Bancária' : 'Crédito'}
+                            </p>
+                          </div>
+                        </div>
+                        <ChevronRight size={16} className="text-stone-300 group-hover:text-blue-500 transition-colors" />
+                      </button>
+                    ))}
+                  </div>
+                  
+                  <div className="mt-8">
+                    <button 
+                      onClick={() => setShowBulkAccountModal(false)}
+                      className="w-full py-4 bg-stone-100 text-stone-600 rounded-2xl text-sm font-bold hover:bg-stone-200 transition-all active:scale-95"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
           {/* Bulk Action Toolbar */}
           <AnimatePresence>
             {selectedTransactions.length > 0 && activeTab === 'transactions' && (
               <motion.div
+                key="bulk-toolbar"
                 initial={{ y: 50, opacity: 0, x: '-50%', scale: 0.95 }}
                 animate={{ y: 0, opacity: 1, x: '-50%', scale: 1 }}
                 exit={{ y: 50, opacity: 0, x: '-50%', scale: 0.95 }}
-                className="fixed bottom-28 left-1/2 z-[100] w-full max-w-sm sm:max-w-md px-4"
+                className="fixed bottom-28 left-1/2 z-[100] w-full max-w-sm sm:max-w-xl px-4"
               >
                 <div className="bg-stone-900/90 text-white p-2.5 rounded-3xl shadow-2xl flex items-center justify-between border border-white/10 backdrop-blur-xl ring-1 ring-white/10">
                   <div className="flex items-center gap-3 ml-3">
                     <div className="w-8 h-8 rounded-2xl bg-emerald-500 shadow-lg shadow-emerald-500/20 flex items-center justify-center text-[10px] font-black">
                       {selectedTransactions.length}
                     </div>
-                    <p className="text-[10px] font-bold tracking-tight uppercase opacity-80">Selecionados</p>
+                    <p className="text-[10px] font-bold tracking-tight uppercase opacity-80 hidden xs:block">Selecionados</p>
                   </div>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
                     <button 
                       onClick={() => setSelectedTransactions([])}
-                      className="h-9 px-3 hover:bg-white/10 rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-colors"
+                      className="h-9 px-3 hover:bg-white/10 rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-colors shrink-0"
                     >
                       Limpar
                     </button>
                     <button 
                       disabled={isBulkSubmitting}
                       onClick={handleBulkQuitar}
-                      className="h-9 px-4 bg-emerald-500 hover:bg-emerald-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                      className="h-9 px-4 bg-emerald-500 hover:bg-emerald-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20 shrink-0"
                     >
                       {isBulkSubmitting ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
                       Quitar
                     </button>
                     <button 
                       disabled={isBulkSubmitting}
+                      onClick={handleBulkAccountRequest}
+                      className="h-9 px-4 bg-blue-500 hover:bg-blue-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg shadow-blue-500/20 shrink-0"
+                    >
+                      {isBulkSubmitting ? <Loader2 size={12} className="animate-spin" /> : <Landmark size={12} />}
+                      Alterar Conta
+                    </button>
+                    <button 
+                      disabled={isBulkSubmitting}
                       onClick={handleBulkDeleteRequest}
-                      className="h-9 px-4 bg-rose-500 hover:bg-rose-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg shadow-rose-500/20"
+                      className="h-9 px-4 bg-rose-500 hover:bg-rose-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg shadow-rose-500/20 shrink-0"
                     >
                       {isBulkSubmitting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
                       Excluir
