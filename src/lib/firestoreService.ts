@@ -3,6 +3,7 @@ import {
   doc, 
   getDocs, 
   getDoc, 
+  setDoc,
   addDoc, 
   updateDoc, 
   deleteDoc, 
@@ -258,5 +259,133 @@ export const firestoreService = {
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
+  },
+
+  async getUserProfile(uidOverride?: string) {
+    const uid = uidOverride || auth.currentUser?.uid;
+    if (!uid) return null;
+    const path = `users/${uid}`;
+    try {
+      const docRef = doc(db, 'users', uid);
+      const snapshot = await getDoc(docRef);
+      if (snapshot.exists()) {
+        return { id: snapshot.id, ...snapshot.data() };
+      }
+      return null;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, path);
+      return null;
+    }
+  },
+
+  async updateUserProfile(uid: string, data: any) {
+    const path = `users/${uid}`;
+    try {
+      const docRef = doc(db, 'users', uid);
+      const snapshot = await getDoc(docRef);
+      if (snapshot.exists()) {
+        await updateDoc(docRef, cleanData({
+          ...data,
+          updatedAt: serverTimestamp()
+        }));
+      } else {
+        await setDoc(docRef, cleanData({
+          ...data,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }));
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  },
+
+  async getSentAlerts(uid: string) {
+    const path = `users/${uid}/alertas_despesas`;
+    try {
+      const q = query(collection(db, 'users', uid, 'alertas_despesas'));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, path);
+      return [];
+    }
+  },
+
+  async saveSentAlert(uid: string, alertId: string, alertData: any) {
+    const path = `users/${uid}/alertas_despesas/${alertId}`;
+    try {
+      const docRef = doc(db, 'users', uid, 'alertas_despesas', alertId);
+      await setDoc(docRef, cleanData({
+        ...alertData,
+        updatedAt: serverTimestamp()
+      }));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, path);
+    }
+  },
+
+  async checkAndExtendRecurringTransactions(uid: string, transactionsList: any[]) {
+    const groups: { [groupId: string]: any[] } = {};
+    transactionsList.forEach(t => {
+      if (t.isRecurringEntry && t.recurringGroup) {
+        const gId = String(t.recurringGroup);
+        if (!groups[gId]) groups[gId] = [];
+        groups[gId].push(t);
+      }
+    });
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const todayTime = new Date(todayStr + 'T00:00:00').getTime();
+
+    let extendedCount = 0;
+
+    for (const gId of Object.keys(groups)) {
+      const groupTrans = groups[gId];
+      
+      // Sort ascending
+      groupTrans.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      
+      // Filter those that are >= today's date
+      const futureOrTodayCount = groupTrans.filter(t => {
+        const tTime = new Date(t.date).getTime();
+        return tTime >= todayTime;
+      }).length;
+
+      const needed = 36 - futureOrTodayCount;
+      if (needed > 0) {
+        console.log(`[checkAndExtend] Grupo ${gId} tem ${futureOrTodayCount} lançamentos futuros. Estendendo mais ${needed} lançamentos.`);
+        const archetype = groupTrans[groupTrans.length - 1];
+        const frequency = archetype.recurringFrequency || 'monthly';
+        const lastDate = new Date(archetype.date);
+
+        for (let i = 1; i <= needed; i++) {
+          const nextDate = new Date(lastDate);
+          if (frequency === 'monthly') nextDate.setMonth(nextDate.getMonth() + i);
+          else if (frequency === 'weekly') nextDate.setDate(nextDate.getDate() + i * 7);
+          else if (frequency === 'annually') nextDate.setFullYear(nextDate.getFullYear() + i);
+          else nextDate.setMonth(nextDate.getMonth() + i);
+
+          const newTransPayload = {
+            uid,
+            description: archetype.description || "",
+            amount: archetype.amount || 0,
+            type: archetype.type || "expense",
+            category: archetype.category || "Outros",
+            account: archetype.account || "",
+            date: nextDate.toISOString(),
+            isRecurringEntry: true,
+            recurringGroup: archetype.recurringGroup,
+            recurringFrequency: frequency,
+            settled: false
+          };
+
+          await this.addTransaction(newTransPayload);
+          extendedCount++;
+        }
+      }
+    }
+
+    return extendedCount;
   }
 };

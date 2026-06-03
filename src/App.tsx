@@ -40,7 +40,8 @@ import {
   Download,
   FileDown,
   GripVertical,
-  Landmark
+  Landmark,
+  RefreshCw
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
@@ -224,6 +225,7 @@ export default function App() {
   const { user, loading: authLoading, signInWithGoogle, logout, connectionError } = useAuth();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [hasCheckedRecurring, setHasCheckedRecurring] = useState(false);
   const [cards, setCards] = useState<CardData[]>([]);
   const [insights, setInsights] = useState<Insight[]>([]);
   const lastInsightRef = React.useRef<number>(0);
@@ -234,6 +236,15 @@ export default function App() {
   const [aiInput, setAiInput] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [chatResponse, setChatResponse] = useState<string | null>(null);
+
+  // Settings and WhatsApp Integration States
+  const [showSettings, setShowSettings] = useState(false);
+  const [whatsappPhone, setWhatsappPhone] = useState('');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isMonitoringTestRunning, setIsMonitoringTestRunning] = useState(false);
+  const [testMonitoringSummary, setTestMonitoringSummary] = useState<any>(null);
+  const [isExtendingRunning, setIsExtendingRunning] = useState(false);
+  const [extendedSummary, setExtendedSummary] = useState<any>(null);
 
   // Form states for new card
   const [showNewCardForm, setShowNewCardForm] = useState(false);
@@ -625,12 +636,18 @@ export default function App() {
     try {
       const currentUid = user.uid;
       console.log("Fetching data for UID:", currentUid);
-      const [transactionsData, cardsData, accountsRawData, categoriesData] = await Promise.all([
+      const [transactionsData, cardsData, accountsRawData, categoriesData, userProfileRaw] = await Promise.all([
         firestoreService.getTransactions(currentUid),
         firestoreService.getCards(currentUid),
         firestoreService.getAccounts(currentUid),
-        firestoreService.getCategories(currentUid)
+        firestoreService.getCategories(currentUid),
+        firestoreService.getUserProfile(currentUid)
       ]);
+      
+      const userProfile = userProfileRaw as any;
+      if (userProfile && userProfile.telefoneWhatsapp) {
+        setWhatsappPhone(userProfile.telefoneWhatsapp);
+      }
       
       console.log("Fetched transactions count:", (transactionsData as any[])?.length || 0);
       console.log("Fetched cards count:", (cardsData as any[])?.length || 0);
@@ -728,6 +745,23 @@ export default function App() {
       ) as CardData[];
       
       setCards(deduplicatedCards);
+
+      // Automated check and extend recurring transactions on login / load
+      if (!hasCheckedRecurring && currentUid && uniqueTransactions.length > 0) {
+        setHasCheckedRecurring(true);
+        setTimeout(async () => {
+          try {
+            console.log("[fetchData] Verificando se é necessário estender lançamentos recorrentes...");
+            const extendedCount = await firestoreService.checkAndExtendRecurringTransactions(currentUid, uniqueTransactions);
+            if (extendedCount > 0) {
+              console.log(`[fetchData] Lançamentos recorrentes estendidos: ${extendedCount}. Recarregando dados...`);
+              fetchData();
+            }
+          } catch (extendErr) {
+            console.error("Erro ao verificar/estender lançamentos recorrentes:", extendErr);
+          }
+        }, 500);
+      }
 
       // Reset filters if no data in current month but data exists elsewhere
       if (uniqueTransactions.length > 0 && !showAllMonths) {
@@ -1655,6 +1689,221 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Modal de Configurações de WhatsApp / Alertas de Vencimento */}
+      <AnimatePresence>
+        {showSettings && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6" key="settings-modal-container">
+            <motion.div 
+              key="settings-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { setShowSettings(false); setTestMonitoringSummary(null); }}
+              className="absolute inset-0 bg-stone-900/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              key="settings-content"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg z-10"
+            >
+              <Card className="shadow-2xl border-stone-200 bg-white p-6 max-h-[85vh] overflow-y-auto rounded-3xl">
+                <div className="flex justify-between items-center mb-6">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-emerald-50 text-emerald-600 rounded-2xl">
+                      <Settings size={22} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold tracking-tight text-stone-900">Configurações de Alertas</h3>
+                      <p className="text-xs text-stone-500">Notificações automáticas de despesas</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => { setShowSettings(false); setTestMonitoringSummary(null); }} 
+                    className="p-2 hover:bg-stone-100 rounded-full transition-colors"
+                  >
+                    <X size={20} className="text-stone-400" />
+                  </button>
+                </div>
+
+                <div className="space-y-6">
+                  {/* Info / Explanation */}
+                  <div className="p-4 bg-stone-50 rounded-2xl border border-stone-100 text-xs text-stone-600 leading-relaxed">
+                    <p className="mb-2 font-semibold text-stone-950 flex items-center gap-1.5">
+                      <Bell size={14} className="text-emerald-600" /> Como funcionam os alertas no WhatsApp?
+                    </p>
+                    O sistema de monitoramento varre todas as suas despesas pendentes diariamente às 08h00. Se uma despesa vencer <strong className="text-stone-900 font-bold">hoje (D0)</strong> ou <strong className="text-stone-900 font-bold">daqui a 2 dias (D-2)</strong>, nós disparamos um lembrete automático com descrição, valor e vencimento via WhatsApp.
+                  </div>
+
+                  {/* Input Form */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest block">
+                      Número de Telefone WhatsApp
+                    </label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-400 text-sm">
+                          55
+                        </div>
+                        <input
+                          type="text"
+                          value={whatsappPhone}
+                          onChange={(e) => setWhatsappPhone(e.target.value)}
+                          placeholder="DDD + Número (ex: 11999999999)"
+                          className="w-full pl-9 pr-4 py-3 bg-stone-50 border border-stone-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-stone-900 focus:bg-white text-sm"
+                        />
+                      </div>
+                      <button
+                        onClick={async () => {
+                          if (!user) return;
+                          setIsSavingSettings(true);
+                          try {
+                            await firestoreService.updateUserProfile(user.uid, { telefoneWhatsapp: whatsappPhone });
+                            setSuccessMessage("Configurações salvas com sucesso!");
+                            setTimeout(() => setSuccessMessage(null), 3500);
+                          } catch (err: any) {
+                            setErrorMessage("Erro ao salvar configurações.");
+                            setTimeout(() => setErrorMessage(null), 3500);
+                          } finally {
+                            setIsSavingSettings(false);
+                          }
+                        }}
+                        disabled={isSavingSettings}
+                        className="px-5 py-3 bg-stone-900 text-white font-bold rounded-2xl text-xs hover:bg-stone-850 active:scale-95 transition-all flex items-center gap-2"
+                      >
+                        {isSavingSettings ? <Loader2 size={14} className="animate-spin" /> : "Salvar"}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-stone-400">
+                      Insira apenas números com DDD (Código do país pré-definido como Brasil: +55). Ex: 11999999999
+                    </p>
+                  </div>
+
+                  <div className="h-px bg-stone-100" />
+
+                  {/* Tester Area */}
+                  <div className="space-y-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-stone-900 flex items-center gap-1.5">
+                        <Sparkles size={15} className="text-emerald-500" /> Teste de Integração Instantâneo
+                      </h4>
+                      <p className="text-[10px] text-stone-400">
+                        Execute a varredura manual agora para simular a tarefa diária e receber as notificações pendentes no seu WhatsApp.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={async () => {
+                        if (!user) {
+                          setErrorMessage("Você precisa estar autenticado para realizar este teste.");
+                          return;
+                        }
+                        setIsMonitoringTestRunning(true);
+                        setTestMonitoringSummary(null);
+                        try {
+                          // Fetch existing sent alerts to prevent duplicates
+                          const existingAlertDocs = await firestoreService.getSentAlerts(user.uid);
+                          const sentAlertsIds = existingAlertDocs.map((doc: any) => doc.id);
+
+                          // Run verification by passing transactions payload
+                          const res = await fetch("/api/admin/monitor-vencimentos", {
+                            method: "POST",
+                            headers: {
+                              "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({
+                              userId: user.uid,
+                              telefoneWhatsapp: whatsappPhone,
+                              transactions: transactions,
+                              sentAlertsIds: sentAlertsIds
+                            })
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            const summary = data.summary;
+                            
+                            // Save any newly dispatched alerts to user's collection on Firestore
+                            if (summary.newAlerts && summary.newAlerts.length > 0) {
+                              for (const alert of summary.newAlerts) {
+                                await firestoreService.saveSentAlert(user.uid, alert.id, alert);
+                              }
+                            }
+
+                            setTestMonitoringSummary(summary);
+                            setSuccessMessage("Simulação manual processada com sucesso!");
+                            setTimeout(() => setSuccessMessage(null), 3500);
+                          } else {
+                            throw new Error(data.message || data.error || "Falha ao processar simulação");
+                          }
+                        } catch (err: any) {
+                          setErrorMessage(`Erro ao testar: ${err.message}`);
+                          setTimeout(() => setErrorMessage(null), 5000);
+                        } finally {
+                          setIsMonitoringTestRunning(false);
+                        }
+                      }}
+                      disabled={isMonitoringTestRunning || !whatsappPhone}
+                      className="w-full py-3 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-bold uppercase tracking-wider rounded-2xl transition-all shadow-sm flex items-center justify-center gap-2"
+                    >
+                      {isMonitoringTestRunning ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" />
+                          Varrendo Lançamentos e Enviando Mensagens...
+                        </>
+                      ) : (
+                        "Varrer Despesas e Disparar Alertas"
+                      )}
+                    </button>
+
+                    {testMonitoringSummary && (
+                      <div className="p-4 bg-stone-50 border border-stone-200 rounded-2xl text-xs space-y-3 max-h-[250px] overflow-y-auto">
+                        <div className="flex justify-between font-black uppercase text-[10px] tracking-wider text-stone-500 pb-1.5 border-b border-stone-200">
+                          <span>Relatório da Varredura</span>
+                          <span className="text-stone-900">Resultado Live</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="p-2 bg-white border border-stone-100 rounded-xl shadow-sm">
+                            <p className="text-stone-400 text-[9px] font-bold uppercase">Contas Verificadas</p>
+                            <p className="text-sm font-black text-stone-800">{testMonitoringSummary.totalUsersProcessed}</p>
+                          </div>
+                          <div className="p-2 bg-white border border-stone-100 rounded-xl shadow-sm">
+                            <p className="text-emerald-500 text-[9px] font-bold uppercase">Msgs Enviadas</p>
+                            <p className="text-sm font-black text-emerald-600">{testMonitoringSummary.alertsSent}</p>
+                          </div>
+                          <div className="p-2 bg-white border border-stone-100 rounded-xl shadow-sm">
+                            <p className="text-rose-500 text-[9px] font-bold uppercase">Falhas</p>
+                            <p className="text-sm font-black text-rose-600">{testMonitoringSummary.failures}</p>
+                          </div>
+                        </div>
+                        
+                        {testMonitoringSummary.details && testMonitoringSummary.details.length > 0 ? (
+                          <div className="space-y-1.5 pt-2">
+                            <p className="font-bold text-[10px] uppercase tracking-wider text-stone-500">Log de Operações:</p>
+                            <ul className="space-y-1 font-mono text-[9px] leading-tight text-stone-600">
+                              {testMonitoringSummary.details.map((detail: string, idx: number) => (
+                                <li key={idx} className={`p-1.5 rounded border ${detail.startsWith('Sucesso') ? 'bg-emerald-50/50 border-emerald-100 text-emerald-800' : 'bg-rose-50/50 border-rose-100 text-rose-800'}`}>
+                                  {detail}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : (
+                          <p className="text-[9px] font-medium text-stone-400 text-center pt-2">
+                            Nenhuma despesa vence hoje ou daqui a 2 dias que precise de novos alertas para este usuário.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Sidebar / Nav */}
       <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur-xl border border-black/5 px-6 py-3 rounded-full shadow-2xl z-50 flex items-center gap-8">
         <button onClick={() => setActiveTab('dashboard')} title="Painel de Controle" className={`p-2 rounded-full transition-all hover:scale-110 active:scale-95 ${activeTab === 'dashboard' ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400 hover:text-stone-600 hover:bg-stone-50'}`}>
@@ -1678,6 +1927,13 @@ export default function App() {
           <MessageSquare size={20} />
         </button>
         */}
+        <button 
+          onClick={() => setShowSettings(true)}
+          className={`p-2 transition-all hover:scale-110 active:scale-95 duration-150 ${showSettings ? 'text-stone-900' : 'text-stone-400 hover:text-stone-600'}`}
+          title="Configurações de Alertas de Vencimento"
+        >
+          <Settings size={20} />
+        </button>
         <div className="w-px h-6 bg-stone-200" />
         <button 
           onClick={logout}
@@ -3120,7 +3376,7 @@ export default function App() {
 
             <AnimatePresence>
               {showManageCategoriesModal && (
-                <div key="categories-modal-root" className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && setShowManageCategoriesModal(false)}>
+                <div key="categories-modal-root" className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && setShowManageCategoriesModal(false)}>
                   <motion.div 
                     key="categories-modal-overlay"
                     initial={{ opacity: 0 }}
@@ -3590,7 +3846,6 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md overflow-y-auto"
-              onClick={(e) => e.target === e.currentTarget && resetTransForm()}
             >
               <motion.div 
                 key="transaction-form-box"
@@ -3745,6 +4000,18 @@ export default function App() {
                                         {c.name}
                                       </button>
                                     ))}
+                              </div>
+                              <div className="pt-2 border-t border-stone-100">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowCategoryDropdown(false);
+                                    setShowManageCategoriesModal(true);
+                                  }}
+                                  className="w-full text-center py-2 text-stone-500 hover:text-stone-900 font-bold uppercase tracking-wider text-[10px] transition-colors rounded-lg hover:bg-stone-50 block"
+                                >
+                                  Gerenciar Categorias
+                                </button>
                               </div>
                             </motion.div>
                           )}

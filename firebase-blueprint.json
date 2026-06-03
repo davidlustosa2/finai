@@ -75,6 +75,31 @@
         "type": { "type": "string", "enum": ["income", "expense"], "description": "Category type" }
       },
       "required": ["uid", "name", "type"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile with preferences and contact numbers",
+      "type": "object",
+      "properties": {
+        "telefoneWhatsapp": { "type": "string", "description": "WhatsApp phone number for receiving automated alerts" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "AlertaDespesa": {
+      "title": "AlertaDespesa",
+      "description": "Log tracking sent expense alerts through WhatsApp",
+      "type": "object",
+      "properties": {
+        "despesaId": { "type": "string", "description": "Transaction ID reference" },
+        "tipoAlerta": { "type": "string", "enum": ["D0", "D-2"], "description": "Alert trigger offset" },
+        "sentAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["success", "error"] },
+        "recipient": { "type": "string", "description": "Sanitized receiver number string" },
+        "message": { "type": "string", "description": "Exact text dispatched" },
+        "error": { "type": "string", "description": "API/HTTP exception code log" }
+      },
+      "required": ["despesaId", "tipoAlerta", "sentAt", "status", "recipient", "message"]
     }
   },
   "firestore": {
@@ -93,6 +118,14 @@
     "/categories/{categoryId}": {
       "schema": "Category",
       "description": "User custom categories"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User preferences and setup"
+    },
+    "/users/{userId}/alertas_despesas/{alertaId}": {
+      "schema": "AlertaDespesa",
+      "description": "Sent WhatsApp notification ledger for deduplication"
     }
   }
 }

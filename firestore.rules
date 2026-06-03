@@ -7,7 +7,7 @@ service cloud.firestore {
     }
 
     function isOwner(resourceData) {
-      return isSignedIn() && (resourceData.uid == request.auth.uid || !resourceData.keys().hasAll(['uid']));
+      return isSignedIn() && (!('uid' in resourceData) || resourceData.uid == request.auth.uid);
     }
 
     function incoming() {
@@ -65,43 +65,53 @@ service cloud.firestore {
     }
 
     match /transactions/{transactionId} {
-      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || !resource.data.keys().hasAll(['uid']));
+      allow list: if isOwner(resource.data);
       allow get: if isOwner(resource.data);
       allow create: if isSignedIn() && isValidTransaction(incoming());
-      allow update: if isOwner(resource.data) && (isValidTransaction(incoming()) || !existing().keys().hasAll(['uid'])) && (
-        !existing().keys().hasAll(['uid']) || incoming().uid == existing().uid
+      allow update: if isOwner(resource.data) && (isValidTransaction(incoming()) || !('uid' in existing())) && (
+        !('uid' in existing()) || incoming().uid == existing().uid
       );
       allow delete: if isOwner(resource.data);
     }
 
     match /cards/{cardId} {
-      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || !resource.data.keys().hasAll(['uid']));
+      allow list: if isOwner(resource.data);
       allow get: if isOwner(resource.data);
       allow create: if isSignedIn() && isValidCard(incoming());
-      allow update: if isOwner(resource.data) && (isValidCard(incoming()) || !existing().keys().hasAll(['uid'])) && (
-        !existing().keys().hasAll(['uid']) || incoming().uid == existing().uid
+      allow update: if isOwner(resource.data) && (isValidCard(incoming()) || !('uid' in existing())) && (
+        !('uid' in existing()) || incoming().uid == existing().uid
       );
       allow delete: if isOwner(resource.data);
     }
 
     match /categories/{categoryId} {
-      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || !resource.data.keys().hasAll(['uid']));
+      allow list: if isOwner(resource.data);
       allow get: if isOwner(resource.data);
       allow create: if isSignedIn() && isValidCategory(incoming()) && incoming().uid == request.auth.uid;
       allow update: if isOwner(resource.data) && isValidCategory(incoming()) && (
-        !incoming().keys().hasAll(['uid']) || incoming().uid == request.auth.uid
+        !('uid' in incoming()) || incoming().uid == request.auth.uid
       );
       allow delete: if isOwner(resource.data);
     }
 
     match /accounts/{accountId} {
-      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || !resource.data.keys().hasAll(['uid']));
+      allow list: if isOwner(resource.data);
       allow get: if isOwner(resource.data);
       allow create: if isSignedIn() && isValidAccount(incoming());
-      allow update: if isOwner(resource.data) && (isValidAccount(incoming()) || !existing().keys().hasAll(['uid'])) && (
-        !existing().keys().hasAll(['uid']) || incoming().uid == existing().uid
+      allow update: if isOwner(resource.data) && (isValidAccount(incoming()) || !('uid' in existing())) && (
+        !('uid' in existing()) || incoming().uid == existing().uid
       );
       allow delete: if isOwner(resource.data);
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && userId == request.auth.uid;
+      allow create, update: if isSignedIn() && userId == request.auth.uid;
+
+      match /alertas_despesas/{alertaId} {
+        allow get, list: if isSignedIn() && userId == request.auth.uid;
+        allow create, update, delete: if isSignedIn() && userId == request.auth.uid;
+      }
     }
   }
 }

@@ -27,9 +27,7 @@ export const createRecurringOrInstallments = (baseData: any) => {
       });
     }
   } else if (isRecurring) {
-    let count = 12;
-    if (frequency === 'weekly') count = 52;
-    if (frequency === 'annually') count = 10; // 10 years for annual
+    let count = 36;
     
     const recurringGroup = Date.now();
     for (let i = 0; i < count; i++) {
