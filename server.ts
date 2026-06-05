@@ -3,7 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { initializeApp, getApps, getApp } from "firebase-admin/app";
+import { initializeApp, getApps, getApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import cron from "node-cron";
 import * as fs from "fs";
@@ -12,11 +12,39 @@ import * as fs from "fs";
 const configPath = path.join(process.cwd(), "firebase-applet-config.json");
 const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
 
-const appAdmin = getApps().length === 0
-  ? initializeApp({
+let appAdmin;
+
+if (getApps().length === 0) {
+  const serviceAccountVar = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  if (serviceAccountVar) {
+    try {
+      console.log("[Firebase Admin] Inicializando com chave de Conta de Serviço de FIREBASE_SERVICE_ACCOUNT_KEY.");
+      let serviceAccount;
+      const trimmedKey = serviceAccountVar.trim();
+      if (trimmedKey.startsWith("{")) {
+        serviceAccount = JSON.parse(trimmedKey);
+      } else {
+        // assume base64
+        serviceAccount = JSON.parse(Buffer.from(trimmedKey, "base64").toString("utf-8"));
+      }
+      appAdmin = initializeApp({
+        credential: cert(serviceAccount),
+      });
+    } catch (err: any) {
+      console.error("[Firebase Admin] Erro ao analisar FIREBASE_SERVICE_ACCOUNT_KEY, usando padrão de credenciais de aplicação:", err.message);
+      appAdmin = initializeApp({
+        projectId: firebaseConfig.projectId,
+      });
+    }
+  } else {
+    console.log("[Firebase Admin] FIREBASE_SERVICE_ACCOUNT_KEY não encontrada. Usando padrão de credenciais padrão do ambiente.");
+    appAdmin = initializeApp({
       projectId: firebaseConfig.projectId,
-    })
-  : getApp();
+    });
+  }
+} else {
+  appAdmin = getApp();
+}
 
 const dbAdmin = getFirestore(appAdmin, firebaseConfig.firestoreDatabaseId);
 
