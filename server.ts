@@ -605,6 +605,40 @@ async function startServer() {
     }
   });
 
+  // Secure Cron Trigger endpoint for external schedulers (e.g., cron-job.org / n8n)
+  app.all("/api/cron-trigger", async (req, res) => {
+    const queryToken = req.query.token || (req.body && req.body.token) || req.headers["x-cron-token"];
+    const serverToken = process.env.CRON_SECRET_TOKEN;
+
+    if (serverToken && queryToken !== serverToken) {
+      console.warn("[CRON_TRIGGER] Tentativa de ativação externa negada: token inválido.");
+      return res.status(401).json({ success: false, error: "Não autorizado: Token inválido ou ausente." });
+    }
+
+    console.log("[CRON_TRIGGER] Chamada externa aceita. Iniciando monitoramento e extensão automáticos...");
+    const results: any = {
+      timestamp: new Date().toISOString(),
+      alerts: null,
+      extensions: null
+    };
+
+    try {
+      results.alerts = await monitorarVencimentos();
+    } catch (err: any) {
+      console.error("[CRON_TRIGGER] Erro no monitorarVencimentos externo:", err);
+      results.alerts = { success: false, error: err.message };
+    }
+
+    try {
+      results.extensions = await estenderLancamentosRecorrentes();
+    } catch (err: any) {
+      console.error("[CRON_TRIGGER] Erro no estenderLancamentosRecorrentes externo:", err);
+      results.extensions = { success: false, error: err.message };
+    }
+
+    res.json({ success: true, results });
+  });
+
   app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
   // Vite / Static Serving

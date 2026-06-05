@@ -226,6 +226,7 @@ export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [hasCheckedRecurring, setHasCheckedRecurring] = useState(false);
+  const [hasCheckedWhatsAppAlerts, setHasCheckedWhatsAppAlerts] = useState(false);
   const [cards, setCards] = useState<CardData[]>([]);
   const [insights, setInsights] = useState<Insight[]>([]);
   const lastInsightRef = React.useRef<number>(0);
@@ -761,6 +762,64 @@ export default function App() {
             console.error("Erro ao verificar/estender lançamentos recorrentes:", extendErr);
           }
         }, 500);
+      }
+
+      // Automated silent check to send daily WhatsApp vencimento alerts
+      const getLocalDateStr = () => {
+        const now = new Date();
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'America/Sao_Paulo',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const parts = formatter.formatToParts(now);
+        const year = parts.find(p => p.type === 'year')?.value || '';
+        const month = parts.find(p => p.type === 'month')?.value || '';
+        const day = parts.find(p => p.type === 'day')?.value || '';
+        return `${year}-${month}-${day}`; // YYYY-MM-DD
+      };
+
+      const currentLocDate = getLocalDateStr();
+      const storageKey = `last_whatsapp_check_${currentUid}`;
+      const lastCheck = localStorage.getItem(storageKey);
+
+      if (!hasCheckedWhatsAppAlerts && currentUid && userProfile?.telefoneWhatsapp && lastCheck !== currentLocDate && uniqueTransactions.length > 0) {
+        setHasCheckedWhatsAppAlerts(true);
+        setTimeout(async () => {
+          try {
+            console.log("[fetchData] Iniciando varredura AUTOMÁTICA diária de vencimentos para WhatsApp...");
+            const existingAlertDocs = await firestoreService.getSentAlerts(currentUid);
+            const sentAlertsIds = existingAlertDocs.map((doc: any) => doc.id);
+
+            const response = await fetch("/api/admin/monitor-vencimentos", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                userId: currentUid,
+                telefoneWhatsapp: userProfile.telefoneWhatsapp,
+                transactions: uniqueTransactions,
+                sentAlertsIds: sentAlertsIds
+              })
+            });
+
+            const data = await response.json();
+            if (data.success) {
+              const summary = data.summary;
+              if (summary.newAlerts && summary.newAlerts.length > 0) {
+                console.log(`[fetchData] Alertas automáticos do WhatsApp enviados: ${summary.alertsSent}. Salvando registro de envio no banco...`);
+                for (const alert of summary.newAlerts) {
+                  await firestoreService.saveSentAlert(currentUid, alert.id, alert);
+                }
+              }
+              localStorage.setItem(storageKey, currentLocDate);
+            }
+          } catch (autoErr) {
+            console.error("Erro na verificação automática diária de vencimentos WhatsApp:", autoErr);
+          }
+        }, 1500);
       }
 
       // Reset filters if no data in current month but data exists elsewhere
