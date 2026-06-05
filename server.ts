@@ -17,21 +17,53 @@ let appAdmin;
 if (getApps().length === 0) {
   const serviceAccountVar = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   if (serviceAccountVar) {
+    let trimmedKey = serviceAccountVar.trim();
     try {
       console.log("[Firebase Admin] Inicializando com chave de Conta de Serviço de FIREBASE_SERVICE_ACCOUNT_KEY.");
       let serviceAccount;
-      const trimmedKey = serviceAccountVar.trim();
-      if (trimmedKey.startsWith("{")) {
+      
+      // Remove any leading/trailing quotes if they wrap the env variable (common in some hosting environments)
+      if ((trimmedKey.startsWith('"') && trimmedKey.endsWith('"')) || (trimmedKey.startsWith("'") && trimmedKey.endsWith("'"))) {
+        trimmedKey = trimmedKey.slice(1, -1).trim();
+      }
+
+      console.log(`[Firebase Admin] Chave detectada com tamanho ${trimmedKey.length}. Inicial: "${trimmedKey.substring(0, Math.min(trimmedKey.length, 30))}..."`);
+      
+      if (trimmedKey === "{" || (trimmedKey.startsWith("{") && !trimmedKey.endsWith("}"))) {
+        console.error("[Firebase Admin] ALERTA CRÍTICO: Sua chave FIREBASE_SERVICE_ACCOUNT_KEY parece estar cortada/trunca.");
+        console.error("[Firebase Admin] Isso ocorre porque quebras de linha em arquivos .env costumam cortar o valor no primeiro newline.");
+        console.error("[Firebase Admin] Por favor, converta seu JSON do Firebase para uma única linha (removendo quebras de linha) OU converta-o para Base64!");
+        throw new Error("Chave Firebase Service Account corrompida ou incompleta no arquivo .env (provavelmente cortada devido a quebras de linha)");
+      }
+
+      if (trimmedKey.startsWith("{") && trimmedKey.endsWith("}")) {
+        // inline JSON
         serviceAccount = JSON.parse(trimmedKey);
       } else {
-        // assume base64
-        serviceAccount = JSON.parse(Buffer.from(trimmedKey, "base64").toString("utf-8"));
+        // Assume Base64. Try to decode it.
+        try {
+          const decoded = Buffer.from(trimmedKey, "base64").toString("utf-8");
+          const decodedTrimmed = decoded.trim();
+          if (decodedTrimmed.startsWith("{") && decodedTrimmed.endsWith("}")) {
+            serviceAccount = JSON.parse(decodedTrimmed);
+            console.log("[Firebase Admin] Chave Base64 decodificada e parseada com SUCESSO!");
+          } else {
+            throw new Error("O valor decodificado de Base64 não parece ser um JSON válido (não começa com '{' e termina com '}').");
+          }
+        } catch (base64Err: any) {
+          console.error("[Firebase Admin] Erro de decodificação Base64:", base64Err.message);
+          // Fallback to direct JSON.parse in case it's actually some weird formatted JSON on a single line
+          serviceAccount = JSON.parse(trimmedKey);
+        }
       }
       appAdmin = initializeApp({
         credential: cert(serviceAccount),
       });
+      console.log("[Firebase Admin] Inicializado com SUCESSO usando Conta de Serviço!");
     } catch (err: any) {
-      console.error("[Firebase Admin] Erro ao analisar FIREBASE_SERVICE_ACCOUNT_KEY, usando padrão de credenciais de aplicação:", err.message);
+      console.error("[Firebase Admin] Erro fatal lendo FIREBASE_SERVICE_ACCOUNT_KEY:", err.message);
+      console.error("[Firebase Admin] Detalhes dos primeiros 15 caracteres:", Array.from(trimmedKey.substring(0, Math.min(trimmedKey.length, 15))).map(c => `${c === '\n' ? '\\n' : c === '\r' ? '\\r' : c} (code:${c.charCodeAt(0)})`).join(", "));
+      console.error("[Firebase Admin] Inicializando em modo desenvolvimento/sem permissões administrativas completas.");
       appAdmin = initializeApp({
         projectId: firebaseConfig.projectId,
       });
