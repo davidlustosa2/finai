@@ -483,7 +483,7 @@ export default function App() {
     }
   };
 
-  const calculateRealizedAmount = (t: Transaction) => {
+  const calculateRealizedAmount = React.useCallback((t: Transaction) => {
     if (t.payments && t.payments.length > 0) {
       return t.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
     }
@@ -491,7 +491,49 @@ export default function App() {
       return Number(t.realizedAmount ?? t.amount) || 0;
     }
     return 0;
-  };
+  }, []);
+
+  const totalInitialBalance = React.useMemo(() => {
+    return cards
+      .filter(c => c.type === 'bank')
+      .reduce((acc, c) => acc + (Number(c.limit) || 0), 0);
+  }, [cards]);
+
+  const previousBalanceProjected = React.useMemo(() => {
+    // Filter transactions before the selected month/year
+    const previousTransactions = transactions.filter(t => {
+      const d = new Date(t.date);
+      return d.getFullYear() < selectedYear || (d.getFullYear() === selectedYear && d.getMonth() < selectedMonth);
+    });
+    
+    const previousIncome = previousTransactions
+      .filter(t => t.type === 'income')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+      
+    const previousExpense = previousTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+      
+    return totalInitialBalance + previousIncome - previousExpense;
+  }, [transactions, selectedMonth, selectedYear, totalInitialBalance]);
+
+  const previousBalanceRealized = React.useMemo(() => {
+    // Filter transactions before the selected month/year
+    const previousTransactions = transactions.filter(t => {
+      const d = new Date(t.date);
+      return d.getFullYear() < selectedYear || (d.getFullYear() === selectedYear && d.getMonth() < selectedMonth);
+    });
+    
+    const previousRealizedIncome = previousTransactions
+      .filter(t => t.type === 'income')
+      .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+      
+    const previousRealizedExpense = previousTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+      
+    return totalInitialBalance + previousRealizedIncome - previousRealizedExpense;
+  }, [transactions, selectedMonth, selectedYear, totalInitialBalance, calculateRealizedAmount]);
 
   const filteredTransactions = transactions
     .filter(t => {
@@ -534,21 +576,6 @@ export default function App() {
       return matchesMonth && matchesText && matchesCategory && matchesDay && matchesMin && matchesMax && matchesType && matchesAccount && matchesStatus;
     })
     .sort((a, b) => {
-      const statusA = getTransactionStatus(a);
-      const statusB = getTransactionStatus(b);
-      
-      const statusPriority: Record<string, number> = {
-        'overdue': 0,
-        'due-soon': 1,
-        'normal': 2,
-        'settled': 3
-      };
-
-      if (statusPriority[statusA] !== statusPriority[statusB]) {
-        return statusPriority[statusA] - statusPriority[statusB];
-      }
-
-      // Within the same status priority, use the requested sort order or default to date ASC for urgency
       let comparison = 0;
       if (sortField === 'date') {
         comparison = new Date(a.date).getTime() - new Date(b.date).getTime();
@@ -557,7 +584,19 @@ export default function App() {
       } else if (sortField === 'category') {
         comparison = (a.category || "").localeCompare(b.category || "");
       } else if (sortField === 'amount') {
-        comparison = a.amount - b.amount;
+        const valA = a.type === 'income' ? (Number(a.amount) || 0) : -(Number(a.amount) || 0);
+        const valB = b.type === 'income' ? (Number(b.amount) || 0) : -(Number(b.amount) || 0);
+        comparison = valA - valB;
+      }
+      
+      if (comparison === 0) {
+        // Fallback secondary deterministic sorting (e.g., date if not already, or ID)
+        if (sortField !== 'date') {
+          comparison = new Date(a.date).getTime() - new Date(b.date).getTime();
+        }
+        if (comparison === 0) {
+          comparison = a.id - b.id;
+        }
       }
       
       return sortOrder === 'asc' ? comparison : -comparison;
@@ -584,10 +623,10 @@ export default function App() {
       
       return acc;
     }, { income: 0, expenses: 0, realizedIncome: 0, realizedExpenses: 0, overdueCount: 0, dueSoonCount: 0 });
-  }, [filteredTransactions, getTransactionStatus]);
+  }, [filteredTransactions, getTransactionStatus, calculateRealizedAmount]);
 
-  const currentBalance = metrics.income - metrics.expenses;
-  const realizedBalance = metrics.realizedIncome - metrics.realizedExpenses;
+  const currentBalance = (metrics.income - metrics.expenses) + (showAllMonths ? totalInitialBalance : previousBalanceProjected);
+  const realizedBalance = (metrics.realizedIncome - metrics.realizedExpenses) + (showAllMonths ? totalInitialBalance : previousBalanceRealized);
 
   const computedCards = React.useMemo(() => {
     return cards.map(card => {
