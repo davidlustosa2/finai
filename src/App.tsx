@@ -494,16 +494,39 @@ export default function App() {
   }, []);
 
   const totalInitialBalance = React.useMemo(() => {
+    if (filterAccount && filterAccount !== 'all') {
+      const matchingCard = cards.find(c => (c.name || '').toLowerCase().trim() === filterAccount.toLowerCase().trim());
+      if (matchingCard) {
+        return Number(matchingCard.limit) || 0;
+      }
+      return 0;
+    }
     return cards
       .filter(c => c.type === 'bank')
       .reduce((acc, c) => acc + (Number(c.limit) || 0), 0);
+  }, [cards, filterAccount]);
+
+  const creditCardNames = React.useMemo(() => {
+    return new Set(cards.filter(c => c.type === 'credit').map(c => (c.name || '').toLowerCase().trim()));
   }, [cards]);
 
   const previousBalanceProjected = React.useMemo(() => {
     // Filter transactions before the selected month/year
     const previousTransactions = transactions.filter(t => {
       const d = new Date(t.date);
-      return d.getFullYear() < selectedYear || (d.getFullYear() === selectedYear && d.getMonth() < selectedMonth);
+      const isPrior = d.getFullYear() < selectedYear || (d.getFullYear() === selectedYear && d.getMonth() < selectedMonth);
+      const matchesAccount = filterAccount === 'all' || (t.account || '').toLowerCase().trim() === filterAccount.toLowerCase().trim();
+      
+      if (isPrior && matchesAccount) {
+        if (filterAccount === 'all') {
+          const accName = (t.account || '').toLowerCase().trim();
+          if (creditCardNames.has(accName)) {
+            return false;
+          }
+        }
+        return true;
+      }
+      return false;
     });
     
     const previousIncome = previousTransactions
@@ -515,13 +538,25 @@ export default function App() {
       .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
       
     return totalInitialBalance + previousIncome - previousExpense;
-  }, [transactions, selectedMonth, selectedYear, totalInitialBalance]);
+  }, [transactions, selectedMonth, selectedYear, totalInitialBalance, filterAccount, creditCardNames]);
 
   const previousBalanceRealized = React.useMemo(() => {
     // Filter transactions before the selected month/year
     const previousTransactions = transactions.filter(t => {
       const d = new Date(t.date);
-      return d.getFullYear() < selectedYear || (d.getFullYear() === selectedYear && d.getMonth() < selectedMonth);
+      const isPrior = d.getFullYear() < selectedYear || (d.getFullYear() === selectedYear && d.getMonth() < selectedMonth);
+      const matchesAccount = filterAccount === 'all' || (t.account || '').toLowerCase().trim() === filterAccount.toLowerCase().trim();
+      
+      if (isPrior && matchesAccount) {
+        if (filterAccount === 'all') {
+          const accName = (t.account || '').toLowerCase().trim();
+          if (creditCardNames.has(accName)) {
+            return false;
+          }
+        }
+        return true;
+      }
+      return false;
     });
     
     const previousRealizedIncome = previousTransactions
@@ -533,7 +568,7 @@ export default function App() {
       .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
       
     return totalInitialBalance + previousRealizedIncome - previousRealizedExpense;
-  }, [transactions, selectedMonth, selectedYear, totalInitialBalance, calculateRealizedAmount]);
+  }, [transactions, selectedMonth, selectedYear, totalInitialBalance, calculateRealizedAmount, filterAccount, creditCardNames]);
 
   const filteredTransactions = transactions
     .filter(t => {
@@ -604,6 +639,13 @@ export default function App() {
 
   const metrics = React.useMemo(() => {
     return filteredTransactions.reduce((acc, t) => {
+      if (filterAccount === 'all') {
+        const accName = (t.account || '').toLowerCase().trim();
+        if (creditCardNames.has(accName)) {
+          return acc;
+        }
+      }
+
       const status = getTransactionStatus(t);
       const amount = Number(t.amount) || 0;
       const realizedAmount = calculateRealizedAmount(t);
@@ -623,7 +665,7 @@ export default function App() {
       
       return acc;
     }, { income: 0, expenses: 0, realizedIncome: 0, realizedExpenses: 0, overdueCount: 0, dueSoonCount: 0 });
-  }, [filteredTransactions, getTransactionStatus, calculateRealizedAmount]);
+  }, [filteredTransactions, getTransactionStatus, calculateRealizedAmount, filterAccount, creditCardNames]);
 
   const currentBalance = (metrics.income - metrics.expenses) + (showAllMonths ? totalInitialBalance : previousBalanceProjected);
   const realizedBalance = (metrics.realizedIncome - metrics.realizedExpenses) + (showAllMonths ? totalInitialBalance : previousBalanceRealized);
@@ -721,6 +763,214 @@ export default function App() {
           });
         }
       });
+
+      // --- Credit Card Invoice Reconciler Logic ---
+      const creditCards = unifiedCards.filter(c => c.type === 'credit');
+      const bankAccounts = unifiedCards.filter(c => c.type === 'bank');
+      const defaultBankName = bankAccounts.length > 0 ? bankAccounts[0].name : 'Conta Corrente';
+      
+      let didModifyInvoice = false;
+      
+      const isInvoiceTx = (t: any) => t.isInvoice === true || (t.description?.startsWith('Fatura - ') && t.category === 'Cartão de Crédito');
+      const isInvoiceCreditTx = (t: any) => t.isInvoiceCredit === true || (t.description?.startsWith('Pagamento Fatura - ') && t.category === 'Cartão de Crédito');
+      
+      const userExpenses = transactionsRaw.filter(t => 
+        !isInvoiceTx(t) && 
+        !isInvoiceCreditTx(t) &&
+        t.type === 'expense'
+      );
+      
+      for (const card of creditCards) {
+        // Find all expenses on this credit card (using robust exact or partial name matching)
+        const cardExpenses = userExpenses.filter(t => {
+          if (t.cardId === card.id) return true;
+          const acc = (t.account || '').toLowerCase().trim();
+          const cardNameLower = (card.name || '').toLowerCase().trim();
+          if (!acc || !cardNameLower) return false;
+          return acc === cardNameLower || cardNameLower.includes(acc) || acc.includes(cardNameLower);
+        });
+        
+        // Group by year and month
+        const groups: { [key: string]: any[] } = {};
+        cardExpenses.forEach(t => {
+          const d = new Date(t.date);
+          const key = `${d.getFullYear()}-${d.getMonth()}`;
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(t);
+        });
+        
+        // Find existing invoices for this card (using robust exact/partial matching on invoice description/ids)
+        const existingInvoices = transactionsRaw.filter(t => {
+          if (t.isInvoice === true && t.cardId === card.id) return true;
+          if (t.category !== 'Cartão de Crédito') return false;
+          
+          const desc = (t.description || '').toLowerCase().trim();
+          if (!desc.startsWith('fatura - ')) return false;
+          
+          const invoiceCardPart = desc.replace('fatura - ', '').trim();
+          const cardNameLower = (card.name || '').toLowerCase().trim();
+          
+          return invoiceCardPart === cardNameLower || 
+                 cardNameLower.includes(invoiceCardPart) || 
+                 invoiceCardPart.includes(cardNameLower);
+        });
+        
+        // Ensure there is an invoice for each active year-month group
+        for (const key of Object.keys(groups)) {
+          const [yearStr, monthStr] = key.split('-');
+          const year = parseInt(yearStr);
+          const month = parseInt(monthStr);
+          
+          const groupTx = groups[key];
+          const totalExpenses = groupTx.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+          
+          // Let's find existing invoice for this period
+          const inv = existingInvoices.find(invoice => {
+            const d = new Date(invoice.date);
+            return d.getFullYear() === year && d.getMonth() === month;
+          });
+          
+          const dueDay = parseInt(card.dueDate) || 10;
+          const invDate = new Date(year, month, dueDay, 12, 0, 0).toISOString();
+          
+          if (!inv) {
+            if (totalExpenses > 0) {
+              console.log(`[reconcileCreditCards] Creating invoice for ${card.name} in period ${key}, total: ${totalExpenses}`);
+              await firestoreService.addTransaction({
+                description: `Fatura - ${card.name}`,
+                category: 'Cartão de Crédito',
+                type: 'expense',
+                amount: totalExpenses,
+                account: defaultBankName,
+                date: invDate,
+                isInvoice: true,
+                cardId: card.id,
+                settled: false
+              });
+              didModifyInvoice = true;
+            }
+          } else {
+            const isSettled = !!inv.settled;
+            const updatedFields: any = {};
+            
+            if (Number(inv.amount) !== totalExpenses) {
+              updatedFields.amount = totalExpenses;
+            }
+            if (inv.isInvoice !== true) {
+              updatedFields.isInvoice = true;
+            }
+            if (inv.cardId !== card.id) {
+              updatedFields.cardId = card.id;
+            }
+            
+            if (Object.keys(updatedFields).length > 0) {
+              console.log(`[reconcileCreditCards] Updating invoice ${inv.id} for ${card.name} with fields:`, updatedFields);
+              await firestoreService.updateTransaction(inv.id, updatedFields);
+              didModifyInvoice = true;
+            }
+            
+            // Sync settlement status on card expenses
+            for (const et of groupTx) {
+              if (!!et.settled !== isSettled) {
+                console.log(`[reconcileCreditCards] Syncing settle status of card expense ${et.id} to matches invoice ${inv.id}: ${isSettled}`);
+                await firestoreService.updateTransaction(et.id, { 
+                  settled: isSettled,
+                  payments: isSettled ? [{ amount: et.amount, date: new Date().toISOString() }] : []
+                });
+                didModifyInvoice = true;
+              }
+            }
+            
+            // Ensure credit/income payment exists on credit card if and only if invoice is settled
+            const existingCredit = transactionsRaw.find(t => {
+              if (t.isInvoiceCredit === true && t.invoiceId === inv.id) return true;
+              if (t.invoiceId === inv.id) return true;
+              
+              const desc = (t.description || '').toLowerCase().trim();
+              const isPaymentDesc = desc.startsWith('pagamento fatura - ');
+              if (!isPaymentDesc) return false;
+              
+              const payCardPart = desc.replace('pagamento fatura - ', '').trim();
+              const cardNameLower = (card.name || '').toLowerCase().trim();
+              const matchesCardName = payCardPart === cardNameLower || cardNameLower.includes(payCardPart) || payCardPart.includes(cardNameLower);
+              
+              const txDate = new Date(t.date);
+              const matchesPeriod = txDate.getFullYear() === year && txDate.getMonth() === month;
+              
+              return matchesCardName && matchesPeriod && t.type === 'income';
+            });
+            
+            if (isSettled) {
+              if (!existingCredit) {
+                console.log(`[reconcileCreditCards] Creating credit payment for card ${card.name}, amount: ${totalExpenses}`);
+                await firestoreService.addTransaction({
+                  description: `Pagamento Fatura - ${card.name}`,
+                  category: 'Cartão de Crédito',
+                  type: 'income',
+                  amount: totalExpenses,
+                  account: card.name,
+                  date: inv.date,
+                  isInvoiceCredit: true,
+                  invoiceId: inv.id,
+                  settled: true
+                });
+                didModifyInvoice = true;
+              } else {
+                const creditUpdate: any = {};
+                if (Number(existingCredit.amount) !== totalExpenses) {
+                  creditUpdate.amount = totalExpenses;
+                }
+                if (existingCredit.account !== card.name) {
+                  creditUpdate.account = card.name;
+                }
+                if (existingCredit.isInvoiceCredit !== true) {
+                  creditUpdate.isInvoiceCredit = true;
+                }
+                if (existingCredit.invoiceId !== inv.id) {
+                  creditUpdate.invoiceId = inv.id;
+                }
+                if (!existingCredit.settled) {
+                  creditUpdate.settled = true;
+                }
+                if (Object.keys(creditUpdate).length > 0) {
+                  console.log(`[reconcileCreditCards] Updating existing credit payment ${existingCredit.id} for ${card.name}:`, creditUpdate);
+                  await firestoreService.updateTransaction(existingCredit.id, creditUpdate);
+                  didModifyInvoice = true;
+                }
+              }
+            } else {
+              if (existingCredit) {
+                console.log(`[reconcileCreditCards] Invoice not settled, deleting credit payment ${existingCredit.id} for card ${card.name}`);
+                await firestoreService.deleteTransaction(existingCredit.id);
+                didModifyInvoice = true;
+              }
+            }
+          }
+        }
+        
+        // Clean up invoices that exist but no longer have any active credit card transactions for that period
+        for (const inv of existingInvoices) {
+          const d = new Date(inv.date);
+          const key = `${d.getFullYear()}-${d.getMonth()}`;
+          if (!groups[key]) {
+            console.log(`[reconcileCreditCards] Invoice ${inv.id} for card ${card.name} has no matching card transactions, deleting.`);
+            await firestoreService.deleteTransaction(inv.id);
+            const existingCredit = transactionsRaw.find(t => t.isInvoiceCredit === true && t.invoiceId === inv.id);
+            if (existingCredit) {
+              console.log(`[reconcileCreditCards] Deleting accompanying credit payment ${existingCredit.id}`);
+              await firestoreService.deleteTransaction(existingCredit.id);
+            }
+            didModifyInvoice = true;
+          }
+        }
+      }
+      
+      if (didModifyInvoice) {
+        console.log("[reconcileCreditCards] State updated, reloading data...");
+        fetchData();
+        return;
+      }
+      // ---------------------------------------------
 
       // Calculate summary on frontend
       const totalInitialBalance = unifiedCards
@@ -1694,9 +1944,19 @@ export default function App() {
     const daysMap = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
     return last7Days.map(dateStr => {
-      const dayTransactions = transactions.filter(t => t.date.startsWith(dateStr));
-      const income = dayTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
-      const expense = dayTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
+      const dayTransactions = transactions.filter(t => {
+        if (!t.date.startsWith(dateStr)) return false;
+        if (filterAccount === 'all') {
+          const accName = (t.account || '').toLowerCase().trim();
+          if (creditCardNames.has(accName)) return false;
+        } else {
+          const accName = (t.account || '').toLowerCase().trim();
+          if (accName !== filterAccount.toLowerCase().trim()) return false;
+        }
+        return true;
+      });
+      const income = dayTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + Number(t.amount), 0);
+      const expense = dayTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + Number(t.amount), 0);
       
       const d = new Date(dateStr + 'T12:00:00');
       return {
@@ -1705,21 +1965,31 @@ export default function App() {
         r: income
       };
     });
-  }, [transactions]);
+  }, [transactions, creditCardNames, filterAccount]);
 
   const pieData = React.useMemo(() => {
     const categories: Record<string, number> = {};
     transactions
-      .filter(t => t.type === 'expense')
+      .filter(t => {
+        if (t.type !== 'expense') return false;
+        if (filterAccount === 'all') {
+          const accName = (t.account || '').toLowerCase().trim();
+          if (creditCardNames.has(accName)) return false;
+        } else {
+          const accName = (t.account || '').toLowerCase().trim();
+          if (accName !== filterAccount.toLowerCase().trim()) return false;
+        }
+        return true;
+      })
       .forEach(t => {
-        categories[t.category] = (categories[t.category] || 0) + t.amount;
+        categories[t.category] = (categories[t.category] || 0) + Number(t.amount);
       });
       
     return Object.entries(categories)
-      .map(([name, value]) => ({ name, value }))
+      .map(([name, value]) => ({ name, value: Number(value.toFixed(2)) }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 5);
-  }, [transactions]);
+  }, [transactions, creditCardNames, filterAccount]);
 
   const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#78716c'];
 
