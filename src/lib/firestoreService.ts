@@ -352,6 +352,12 @@ export const firestoreService = {
         return tTime >= todayTime;
       }).length;
 
+      // If there are zero future transactions left, the series has been cancelled, deleted, or naturally finished.
+      if (futureOrTodayCount === 0) {
+        console.log(`[checkAndExtend] Grupo ${gId} não possui lançamentos para hoje ou futuros (cancelado ou finalizado). Pulando.`);
+        continue;
+      }
+
       const needed = 36 - futureOrTodayCount;
       if (needed > 0) {
         console.log(`[checkAndExtend] Grupo ${gId} tem ${futureOrTodayCount} lançamentos futuros. Estendendo mais ${needed} lançamentos.`);

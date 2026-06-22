@@ -1400,6 +1400,22 @@ export default function App() {
             for (const t of futureTrans) {
               await firestoreService.deleteTransaction(t.id.toString());
             }
+            // Remove recurrence metadata from other remaining historical occurrences of this group
+            const remainingTrans = transactions.filter(t => {
+              const isSameGroup = (t.recurringGroup === groupId || t.installmentGroup === groupId);
+              const isFuture = new Date(t.date) > new Date(editingTransaction.date);
+              return isSameGroup && !isFuture && t.id.toString() !== editingTransaction.id.toString();
+            });
+            for (const t of remainingTrans) {
+              await firestoreService.updateTransaction(t.id.toString(), {
+                isRecurringEntry: false,
+                recurringGroup: null,
+                recurringFrequency: null,
+                installmentGroup: null,
+                installmentSequence: null,
+                totalInstallments: null
+              });
+            }
             // Remover metadados de grupo do payload
             const singlePayload = { ...payload };
             delete singlePayload.recurringGroup;
@@ -1459,6 +1475,22 @@ export default function App() {
           });
           for (const t of futureTrans) {
             await firestoreService.deleteTransaction(t.id.toString());
+          }
+          // Remove recurrence metadata from any remaining occurrences (past occurrences) to end the recurrence series cleanly
+          const remainingTrans = transactions.filter(t => {
+            const isSameGroup = (t.recurringGroup === groupId || t.installmentGroup === groupId);
+            const isFutureOrPresent = new Date(t.date) >= new Date(target.date);
+            return isSameGroup && !isFutureOrPresent;
+          });
+          for (const t of remainingTrans) {
+            await firestoreService.updateTransaction(t.id.toString(), {
+              isRecurringEntry: false,
+              recurringGroup: null,
+              recurringFrequency: null,
+              installmentGroup: null,
+              installmentSequence: null,
+              totalInstallments: null
+            });
           }
         } else {
           await firestoreService.deleteTransaction(targetId);

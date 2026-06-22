@@ -506,6 +506,12 @@ async function estenderLancamentosRecorrentes(targetUserId?: string) {
             return tTime >= todayTime;
           }).length;
 
+          // If there are zero future transactions left, the series has been cancelled, deleted, or naturally finished.
+          if (futureOrTodayCount === 0) {
+            console.log(`[estenderLancamentosRecorrentes] Grupo ${gId} do usuário ${uid} não possui lançamentos para hoje ou futuros (cancelado ou finalizado). Pulando.`);
+            continue;
+          }
+
           const needed = 36 - futureOrTodayCount;
           if (needed > 0) {
             console.log(`[estenderLancamentosRecorrentes] Grupo ${gId} do usuário ${uid} precisa de mais ${needed} lançamentos.`);
