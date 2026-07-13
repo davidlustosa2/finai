@@ -705,6 +705,496 @@ async function startServer() {
     res.json({ success: true, results });
   });
 
+  // Helper functions for WhatsApp integrations
+  async function findUserByPhone(phone: string): Promise<any | null> {
+    const cleanPhone = phone.replace(/\D/g, "");
+    if (!cleanPhone) return null;
+
+    let nationalPhone = cleanPhone;
+    if (cleanPhone.startsWith("55") && cleanPhone.length > 2) {
+      nationalPhone = cleanPhone.substring(2);
+    }
+
+    const possibleValues = new Set<string>();
+    possibleValues.add(cleanPhone);
+    possibleValues.add(nationalPhone);
+
+    if (nationalPhone.length === 11 && nationalPhone[2] === "9") {
+      const without9 = nationalPhone.substring(0, 2) + nationalPhone.substring(3);
+      possibleValues.add(without9);
+      possibleValues.add("55" + without9);
+    }
+
+    if (nationalPhone.length === 10) {
+      const with9 = nationalPhone.substring(0, 2) + "9" + nationalPhone.substring(2);
+      possibleValues.add(with9);
+      possibleValues.add("55" + with9);
+    }
+
+    try {
+      const usersSnapshot = await dbAdmin.collection("users").get();
+      for (const doc of usersSnapshot.docs) {
+        const userData = doc.data();
+        const userPhone = userData.telefoneWhatsapp;
+        if (userPhone && typeof userPhone === "string") {
+          const cleanUserPhone = userPhone.replace(/\D/g, "");
+          if (possibleValues.has(cleanUserPhone)) {
+            return { id: doc.id, ...userData };
+          }
+          let userNational = cleanUserPhone;
+          if (cleanUserPhone.startsWith("55") && cleanUserPhone.length > 2) {
+            userNational = cleanUserPhone.substring(2);
+          }
+          if (possibleValues.has(userNational)) {
+            return { id: doc.id, ...userData };
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("[findUserByPhone] Erro ao buscar usuário no Firestore:", err.message);
+    }
+    return null;
+  }
+
+  async function sendWhatsAppMessage(phone: string, text: string) {
+    const apiKey = process.env.AUTHENTICATION_API_KEY || "";
+    if (!apiKey) {
+      console.error("[sendWhatsAppMessage] Erro: AUTHENTICATION_API_KEY não configurada no ambiente!");
+      return false;
+    }
+    const candidatePhones = getPhoneVariants(phone);
+    let success = false;
+    for (const p of candidatePhones) {
+      try {
+        const res = await fetch("https://evolutionapi.davidlustosa.com.br/message/sendText/mano", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": apiKey
+          },
+          body: JSON.stringify({
+            number: p,
+            text: text
+          })
+        });
+        if (res.ok) {
+          success = true;
+          console.log(`[sendWhatsAppMessage] Mensagem enviada com sucesso para ${p}`);
+          break;
+        }
+      } catch (err: any) {
+        console.error(`[sendWhatsAppMessage] Erro enviando para ${p}:`, err.message);
+      }
+    }
+    return success;
+  }
+
+  function calculateBalances(transactions: any[], cards: any[], filterAccount?: string) {
+    let initialBalance = 0;
+    const filterLower = filterAccount?.toLowerCase().trim();
+    const isFiltered = filterLower && filterLower !== "all";
+
+    if (isFiltered) {
+      const matchingCard = cards.find(c => (c.name || "").toLowerCase().trim() === filterLower);
+      if (matchingCard) {
+        initialBalance = Number(matchingCard.limit) || 0;
+      }
+    } else {
+      initialBalance = cards
+        .filter(c => c.type === "bank")
+        .reduce((acc, c) => acc + (Number(c.limit) || 0), 0);
+    }
+
+    const creditCardNames = new Set(cards.filter(c => c.type === "credit").map(c => (c.name || "").toLowerCase().trim()));
+
+    const matchesAccount = (t: any) => {
+      if (!isFiltered) {
+        const accName = (t.account || "").toLowerCase().trim();
+        return !creditCardNames.has(accName);
+      }
+      return (t.account || "").toLowerCase().trim() === filterLower;
+    };
+
+    const calculateRealizedAmount = (t: any) => {
+      if (t.payments && t.payments.length > 0) {
+        return t.payments.reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0);
+      }
+      if (t.settled) {
+        return Number(t.realizedAmount ?? t.amount) || 0;
+      }
+      return 0;
+    };
+
+    let totalIncome = 0;
+    let totalExpense = 0;
+    let totalRealizedIncome = 0;
+    let totalRealizedExpense = 0;
+
+    for (const t of transactions) {
+      if (matchesAccount(t)) {
+        const amt = Number(t.amount) || 0;
+        const realized = calculateRealizedAmount(t);
+        if (t.type === "income") {
+          totalIncome += amt;
+          totalRealizedIncome += realized;
+        } else if (t.type === "expense") {
+          totalExpense += amt;
+          totalRealizedExpense += realized;
+        }
+      }
+    }
+
+    const balanceProjected = initialBalance + totalIncome - totalExpense;
+    const balanceRealized = initialBalance + totalRealizedIncome - totalRealizedExpense;
+
+    return {
+      balanceProjected,
+      balanceRealized,
+      totalIncome,
+      totalRealizedIncome,
+      totalExpense,
+      totalRealizedExpense
+    };
+  }
+
+  // Incoming WhatsApp message Webhook
+  app.post("/api/whatsapp/webhook", async (req, res) => {
+    try {
+      const body = req.body;
+      console.log("[WhatsApp Webhook] Recebendo payload:", JSON.stringify(body));
+
+      let sender = "";
+      let text = "";
+      let fromMe = false;
+
+      if (body.event === "messages.upsert" && body.data) {
+        const data = body.data;
+        sender = data.key?.remoteJid || "";
+        fromMe = !!data.key?.fromMe;
+        text = data.message?.conversation || 
+               data.message?.extendedTextMessage?.text || 
+               data.message?.imageMessage?.caption || 
+               "";
+      } else if (body.sender && body.text) {
+        sender = body.sender;
+        text = body.text;
+        fromMe = false;
+      } else if (body.data?.message) {
+        const data = body.data;
+        sender = data.key?.remoteJid || "";
+        fromMe = !!data.key?.fromMe;
+        text = data.message?.conversation || 
+               data.message?.extendedTextMessage?.text || 
+               "";
+      }
+
+      if (fromMe) {
+        console.log("[WhatsApp Webhook] Mensagem ignorada (enviada por nós mesmos).");
+        return res.sendStatus(200);
+      }
+
+      if (!sender || !text) {
+        console.log("[WhatsApp Webhook] Sem remetente ou mensagem vazia.");
+        return res.sendStatus(200);
+      }
+
+      const cleanPhone = sender.split("@")[0].replace(/\D/g, "");
+      if (!cleanPhone) {
+        console.log("[WhatsApp Webhook] Sem número de telefone válido.");
+        return res.sendStatus(200);
+      }
+
+      console.log(`[WhatsApp Webhook] Processando mensagem de ${cleanPhone}: "${text}"`);
+
+      const user = await findUserByPhone(cleanPhone);
+      if (!user) {
+        console.log(`[WhatsApp Webhook] Nenhum usuário cadastrado com o telefone ${cleanPhone}`);
+        await sendWhatsAppMessage(cleanPhone, "Olá! Não encontrei nenhuma conta ativa vinculada a este número de WhatsApp. Por favor, acesse o painel do aplicativo e cadastre o seu número de WhatsApp nas configurações de perfil para me autorizar!");
+        return res.sendStatus(200);
+      }
+
+      console.log(`[WhatsApp Webhook] Usuário identificado: ${user.id}`);
+
+      const transSnapshot = await dbAdmin.collection("transactions").where("uid", "==", user.id).get();
+      const transactions = transSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+
+      const cardsSnapshot = await dbAdmin.collection("cards").where("uid", "==", user.id).get();
+      const cards = cardsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+
+      const todayStr = tzParts(new Date());
+      const currentDayOfWeek = new Date().toLocaleDateString("pt-BR", { weekday: "long" });
+
+      const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
+      const prompt = `
+Você é o assistente de inteligência artificial pessoal do sistema de gestão financeira do usuário.
+Sua tarefa é analisar a mensagem recebida pelo WhatsApp e identificar qual ação o usuário deseja realizar em suas finanças.
+
+Hoje é: ${todayStr} (${currentDayOfWeek}) - Timezone America/Sao_Paulo.
+
+As contas/cartões cadastrados do usuário são:
+${JSON.stringify(cards.map(c => ({ id: c.id, name: c.name, type: c.type, limit: c.limit })))}
+
+As últimas transações do usuário são:
+${JSON.stringify(transactions.slice(0, 50).map(t => ({ id: t.id, description: t.description, amount: t.amount, type: t.type, date: t.date ? t.date.split("T")[0] : "", settled: t.settled, account: t.account })))}
+
+Mensagem do usuário: "${text}"
+
+--- REGRA DE CLAREZA CRÍTICA ---
+Sempre que a mensagem do usuário não deixar TOTALMENTE claro o que deve ser feito, você deve definir "requiresClarification" como true e fornecer uma resposta polida, amigável e prestativa em "clarificationMessage" (em português) solicitando especificamente as informações que faltam de forma a garantir o entendimento correto e não registrar nenhuma informação de forma errada na base de dados.
+
+Exemplos de falta de clareza (requiresClarification: true):
+- "adicione 50 reais": Faltou a descrição e o tipo (receita ou despesa). Pergunte sobre o que foi esse lançamento e se é uma receita ou despesa.
+- "paguei a conta": Qual conta? Se houver mais de uma conta pendente com nomes semelhantes, ou se nenhuma conta estiver clara, pergunte qual delas ele pagou.
+- "mude o valor da internet para 100": Se houver vários lançamentos de "internet", pergunte qual deles deve ser modificado (fornecendo as opções de datas e valores atuais).
+- "cadastre padaria 10 reais": Não especificou se já foi pago (settled: true) ou está pendente (settled: false). Pergunte se o valor já foi pago ou se é um agendamento futuro.
+- "oi", "olá", etc: Cumprimente de forma calorosa, apresente-se como seu assistente financeiro pessoal, liste o que você pode fazer (cadastrar, editar, quitar lançamentos, consultar saldos e relatórios de vencimentos) e pergunte como pode ajudar hoje.
+
+Exemplos de mensagens claras (requiresClarification: false):
+- "paguei a conta de luz de R$ 150 hoje usando o Nubank": Perfeito! Crie despesa com descrição "Conta de Luz", valor 150, conta "Nubank", data de hoje, settled: true.
+- "luz de 150 para pagar amanhã": Perfeito! Crie despesa com descrição "Luz", valor 150, data de amanhã, settled: false.
+- "recebi salário de 5000 ontem na conta Itaú": Perfeito! Crie receita com descrição "Salário", valor 5000, conta "Itaú", data de ontem, settled: true.
+- "quitar a conta de internet de R$ 90": Se houver uma transação correspondente (por exemplo, descrição "internet" ou "internet fibra" de R$ 90, pendente), selecione o transactionId.
+- "quanto tenho de saldo?": query_balance.
+- "quais são as contas a pagar esta semana?": query_transactions.
+
+Retorne EXCLUSIVAMENTE um objeto JSON no formato abaixo (sem blocos de código adicionais ou markdown):
+{
+  "requiresClarification": boolean,
+  "clarificationMessage": string | null,
+  "action": "create" | "update" | "settle" | "query_balance" | "query_transactions" | null,
+  "params": {
+    "type": "income" | "expense",
+    "amount": number,
+    "description": "string",
+    "category": "string",
+    "date": "YYYY-MM-DD",
+    "account": "string",
+    "settled": boolean,
+    "transactionId": "string",
+    "fieldsToUpdate": {
+      "amount": number,
+      "description": "string",
+      "category": "string",
+      "date": "YYYY-MM-DD",
+      "account": "string",
+      "settled": boolean
+    },
+    "filterAccount": "string",
+    "filterType": "all" | "pending" | "settled",
+    "timeRange": "today" | "week" | "month" | "upcoming"
+  } | null
+}
+      `;
+
+      let aiResponse: any = {};
+      try {
+        const result = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        });
+        const resText = await result.response;
+        aiResponse = JSON.parse(resText.text());
+        console.log("[WhatsApp Webhook] Resposta Gemini:", JSON.stringify(aiResponse));
+      } catch (geminiErr: any) {
+        console.error("[WhatsApp Webhook] Erro chamando Gemini:", geminiErr.message);
+        await sendWhatsAppMessage(cleanPhone, "Desculpe, ocorreu uma instabilidade temporária ao tentar processar sua mensagem. Por favor, tente novamente em instantes.");
+        return res.sendStatus(200);
+      }
+
+      if (aiResponse.requiresClarification) {
+        const reply = aiResponse.clarificationMessage || "Desculpe, não consegui entender exatamente o que deseja. Poderia fornecer mais detalhes?";
+        await sendWhatsAppMessage(cleanPhone, reply);
+        return res.json({ success: true, action: "clarification_sent", reply });
+      }
+
+      const action = aiResponse.action;
+      const params = aiResponse.params || {};
+      let replyMessage = "";
+
+      if (action === "create") {
+        const newDocRef = dbAdmin.collection("transactions").doc();
+        const dateStr = params.date || todayStr;
+        const isoDate = new Date(dateStr + "T12:00:00").toISOString();
+        
+        const payload = {
+          uid: user.id,
+          description: params.description || "Lançamento via WhatsApp",
+          amount: Number(params.amount) || 0,
+          type: params.type || "expense",
+          category: params.category || "Outros",
+          account: params.account || "",
+          date: isoDate,
+          settled: !!params.settled,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp()
+        };
+
+        await newDocRef.set(payload);
+
+        const formatAmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(payload.amount);
+        const emoji = payload.type === "income" ? "📈" : "📉";
+        const formattedDate = new Date(dateStr + "T12:00:00").toLocaleDateString("pt-BR");
+
+        replyMessage = `✅ *Lançamento registrado com sucesso!*\n\n` +
+          `${emoji} *Tipo:* ${payload.type === "income" ? "Receita" : "Despesa"}\n` +
+          `📝 *Descrição:* ${payload.description}\n` +
+          `💰 *Valor:* ${formatAmt}\n` +
+          `📅 *Data:* ${formattedDate}\n` +
+          `💳 *Conta:* ${payload.account || "Não especificada"}\n` +
+          `📌 *Situação:* ${payload.settled ? "Quitado/Realizado ✅" : "Pendente/Previsto ⏳"}`;
+      } 
+      else if (action === "update") {
+        const tId = params.transactionId;
+        if (!tId) {
+          throw new Error("ID do lançamento não identificado pelo assistente.");
+        }
+        
+        const docRef = dbAdmin.collection("transactions").doc(tId);
+        const existingDoc = await docRef.get();
+        if (!existingDoc.exists || existingDoc.data()?.uid !== user.id) {
+          throw new Error("Lançamento correspondente não encontrado na sua base de dados.");
+        }
+
+        const updateData: any = {
+          ...params.fieldsToUpdate,
+          updatedAt: FieldValue.serverTimestamp()
+        };
+
+        if (updateData.date) {
+          updateData.date = new Date(updateData.date + "T12:00:00").toISOString();
+        }
+
+        await docRef.update(updateData);
+
+        const mergedData = { ...existingDoc.data(), ...updateData };
+        const formatAmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(mergedData.amount);
+
+        replyMessage = `✏️ *Lançamento atualizado com sucesso!*\n\n` +
+          `📝 *Descrição:* ${mergedData.description}\n` +
+          `💰 *Valor:* ${formatAmt}\n` +
+          `💳 *Conta:* ${mergedData.account || "Não especificada"}\n` +
+          `📌 *Situação:* ${mergedData.settled ? "Quitado ✅" : "Pendente ⏳"}`;
+      } 
+      else if (action === "settle") {
+        const tId = params.transactionId;
+        if (!tId) {
+          throw new Error("Não consegui identificar qual conta você deseja quitar. Pode especificar o nome ou o valor dela?");
+        }
+
+        const docRef = dbAdmin.collection("transactions").doc(tId);
+        const existingDoc = await docRef.get();
+        if (!existingDoc.exists || existingDoc.data()?.uid !== user.id) {
+          throw new Error("Lançamento correspondente não encontrado na sua base de dados.");
+        }
+
+        await docRef.update({
+          settled: true,
+          updatedAt: FieldValue.serverTimestamp()
+        });
+
+        const data = existingDoc.data() || {};
+        const formatAmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(data.amount);
+
+        replyMessage = `💰 *Lançamento marcado como quitado!*\n\n` +
+          `✅ *Descrição:* ${data.description}\n` +
+          `💵 *Valor:* ${formatAmt}\n` +
+          `📅 *Data:* ${data.date ? new Date(data.date).toLocaleDateString("pt-BR") : ""}`;
+      } 
+      else if (action === "query_balance") {
+        const filterAcc = params.filterAccount || "all";
+        const stats = calculateBalances(transactions, cards, filterAcc);
+
+        const formatVal = (v: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+
+        replyMessage = `📊 *Resumo Geral de Saldos*\n` +
+          (filterAcc !== "all" ? `💳 *Filtro de Conta:* ${filterAcc}\n\n` : `\n`) +
+          `💵 *Saldo Realizado (Disponível):* ${formatVal(stats.balanceRealized)}\n` +
+          `🔮 *Saldo Planejado (Projetado):* ${formatVal(stats.balanceProjected)}\n\n` +
+          `📈 *Receitas Previstas:* ${formatVal(stats.totalIncome)} (Realizado: ${formatVal(stats.totalRealizedIncome)})\n` +
+          `📉 *Despesas Previstas:* ${formatVal(stats.totalExpense)} (Realizado: ${formatVal(stats.totalRealizedExpense)})`;
+      } 
+      else if (action === "query_transactions") {
+        const fType = params.filterType || "all";
+        const tRange = params.timeRange || "month";
+
+        let filtered = transactions;
+
+        if (fType === "pending") {
+          filtered = filtered.filter(t => !t.settled);
+        } else if (fType === "settled") {
+          filtered = filtered.filter(t => t.settled);
+        }
+
+        const todayTime = new Date(todayStr + "T12:00:00").getTime();
+
+        if (tRange === "today") {
+          filtered = filtered.filter(t => t.date && t.date.split("T")[0] === todayStr);
+        } else if (tRange === "week") {
+          const sevenDaysLater = todayTime + 7 * 24 * 60 * 60 * 1000;
+          filtered = filtered.filter(t => {
+            if (!t.date) return false;
+            const tTime = new Date(t.date).getTime();
+            return tTime >= todayTime && tTime <= sevenDaysLater;
+          });
+        } else if (tRange === "upcoming") {
+          filtered = filtered.filter(t => {
+            if (!t.date) return false;
+            const tTime = new Date(t.date).getTime();
+            return tTime >= todayTime && !t.settled;
+          });
+        }
+
+        if (tRange === "upcoming" || tRange === "week") {
+          filtered.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        } else {
+          filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        }
+
+        const totalFound = filtered.length;
+        const items = filtered.slice(0, 10);
+
+        let rangeTitle = "do mês";
+        if (tRange === "today") rangeTitle = "de hoje";
+        if (tRange === "week") rangeTitle = "da semana";
+        if (tRange === "upcoming") rangeTitle = "futuros pendentes";
+
+        let typeTitle = "Lançamentos";
+        if (fType === "pending") typeTitle = "Contas pendentes";
+        if (fType === "settled") typeTitle = "Lançamentos pagos/realizados";
+
+        replyMessage = `📅 *${typeTitle} ${rangeTitle}* (Exibindo ${items.length} de ${totalFound}):\n\n`;
+
+        if (items.length === 0) {
+          replyMessage += "Nenhum lançamento encontrado para os critérios informados.";
+        } else {
+          items.forEach(t => {
+            const formatAmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(t.amount);
+            const dateFmt = t.date ? new Date(t.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) : "";
+            const statusEmoji = t.settled ? "✅" : "⏳";
+            const typeEmoji = t.type === "income" ? "📈" : "📉";
+            replyMessage += `${statusEmoji} ${typeEmoji} *${dateFmt}* - ${t.description}: *${formatAmt}* ${t.account ? `(${t.account})` : ""}\n`;
+          });
+        }
+      } 
+      else {
+        replyMessage = "Olá! Consegui entender sua mensagem, mas não identifiquei uma ação financeira específica. Posso te ajudar a incluir despesas, quitar contas, consultar saldos e muito mais. Como deseja prosseguir?";
+      }
+
+      await sendWhatsAppMessage(cleanPhone, replyMessage);
+      res.json({ success: true, action, replyMessage });
+
+    } catch (err: any) {
+      console.error("[WhatsApp Webhook] Erro no processamento principal:", err);
+      const body = req.body;
+      const rawSender = body.data?.key?.remoteJid || body.sender || "";
+      const phoneDigits = rawSender.split("@")[0].replace(/\D/g, "");
+      if (phoneDigits) {
+        await sendWhatsAppMessage(phoneDigits, `⚠️ *Erro ao processar comando:*\n${err.message}`);
+      }
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
   // Vite / Static Serving
