@@ -48,6 +48,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   AreaChart, 
   Area, 
+  LineChart,
+  Line,
+  Legend,
   XAxis, 
   YAxis, 
   CartesianGrid, 
@@ -55,7 +58,8 @@ import {
   ResponsiveContainer,
   PieChart,
   Pie,
-  Cell
+  Cell,
+  ReferenceLine
 } from 'recharts';
 import { AIService } from './services/aiService';
 
@@ -1966,38 +1970,193 @@ export default function App() {
     }
   };
 
-  const chartData = React.useMemo(() => {
-    const last7Days = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - (6 - i));
-      return d.toISOString().split('T')[0];
+  const currentMonthStats = React.useMemo(() => {
+    const today = new Date();
+    const curMonth = today.getMonth();
+    const curYear = today.getFullYear();
+
+    const applyAccountFilter = (t: Transaction) => {
+      if (filterAccount === 'all') {
+        const accName = (t.account || '').toLowerCase().trim();
+        if (creditCardNames.has(accName)) return false;
+        return true;
+      } else {
+        const accName = (t.account || '').toLowerCase().trim();
+        return accName === filterAccount.toLowerCase().trim();
+      }
+    };
+
+    // 1. Transactions for the current month matching the account filter
+    const curMonthTransactions = transactions.filter(t => {
+      const d = new Date(t.date);
+      return d.getMonth() === curMonth && d.getFullYear() === curYear && applyAccountFilter(t);
     });
 
-    const daysMap = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+    // 2. Income and Expense for the current month
+    const income = curMonthTransactions
+      .filter(t => t.type === 'income')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
-    return last7Days.map(dateStr => {
-      const dayTransactions = transactions.filter(t => {
-        if (!t.date.startsWith(dateStr)) return false;
-        if (filterAccount === 'all') {
-          const accName = (t.account || '').toLowerCase().trim();
-          if (creditCardNames.has(accName)) return false;
-        } else {
-          const accName = (t.account || '').toLowerCase().trim();
-          if (accName !== filterAccount.toLowerCase().trim()) return false;
-        }
+    const expense = curMonthTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    const realizedIncome = curMonthTransactions
+      .filter(t => t.type === 'income')
+      .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+
+    const realizedExpense = curMonthTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+
+    // 3. Previous balance up to the start of the current month matching the account filter
+    const previousTransactions = transactions.filter(t => {
+      const d = new Date(t.date);
+      const isPrior = d.getFullYear() < curYear || (d.getFullYear() === curYear && d.getMonth() < curMonth);
+      return isPrior && applyAccountFilter(t);
+    });
+
+    const previousIncome = previousTransactions
+      .filter(t => t.type === 'income')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    const previousExpense = previousTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    const previousRealizedIncome = previousTransactions
+      .filter(t => t.type === 'income')
+      .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+
+    const previousRealizedExpense = previousTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+
+    // Initial balance
+    let initialBalance = 0;
+    if (filterAccount && filterAccount !== 'all') {
+      const matchingCard = cards.find(c => (c.name || '').toLowerCase().trim() === filterAccount.toLowerCase().trim());
+      if (matchingCard) {
+        initialBalance = Number(matchingCard.limit) || 0;
+      }
+    } else {
+      initialBalance = cards
+        .filter(c => c.type === 'bank')
+        .reduce((acc, c) => acc + (Number(c.limit) || 0), 0);
+    }
+
+    const balanceProjected = initialBalance + previousIncome - previousExpense + income - expense;
+    const balanceRealized = initialBalance + previousRealizedIncome - previousRealizedExpense + realizedIncome - realizedExpense;
+
+    return {
+      balanceProjected,
+      balanceRealized,
+      income,
+      realizedIncome,
+      expense,
+      realizedExpense
+    };
+  }, [transactions, cards, calculateRealizedAmount, filterAccount, creditCardNames]);
+
+  const lineChartData = React.useMemo(() => {
+    const today = new Date();
+    const monthsList: { year: number; month: number; label: string }[] = [];
+
+    // Generate last 12 months, current month, and next 12 months
+    for (let i = -12; i <= 12; i++) {
+      const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
+      const year = d.getFullYear();
+      const month = d.getMonth();
+      const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+      const label = `${monthNames[month]}/${String(year).slice(-2)}`;
+      monthsList.push({ year, month, label });
+    }
+
+    const applyAccountFilter = (t: Transaction) => {
+      if (filterAccount === 'all') {
+        const accName = (t.account || '').toLowerCase().trim();
+        if (creditCardNames.has(accName)) return false;
         return true;
+      } else {
+        const accName = (t.account || '').toLowerCase().trim();
+        return accName === filterAccount.toLowerCase().trim();
+      }
+    };
+
+    // Pre-filter transactions to speed up
+    const filteredTxs = transactions.filter(applyAccountFilter);
+
+    // Sort to be precise
+    const sortedTxs = [...filteredTxs].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // Compute bank limit
+    let initialBalance = 0;
+    if (filterAccount && filterAccount !== 'all') {
+      const matchingCard = cards.find(c => (c.name || '').toLowerCase().trim() === filterAccount.toLowerCase().trim());
+      if (matchingCard) {
+        initialBalance = Number(matchingCard.limit) || 0;
+      }
+    } else {
+      initialBalance = cards
+        .filter(c => c.type === 'bank')
+        .reduce((acc, c) => acc + (Number(c.limit) || 0), 0);
+    }
+
+    return monthsList.map(({ year, month, label }) => {
+      const monthEnd = new Date(year, month + 1, 0, 23, 59, 59);
+
+      // Transactions for this specific month
+      const thisMonthTxs = sortedTxs.filter(t => {
+        const d = new Date(t.date);
+        return d.getFullYear() === year && d.getMonth() === month;
       });
-      const income = dayTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + Number(t.amount), 0);
-      const expense = dayTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + Number(t.amount), 0);
-      
-      const d = new Date(dateStr + 'T12:00:00');
+
+      const income = thisMonthTxs
+        .filter(t => t.type === 'income')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+      const expense = thisMonthTxs
+        .filter(t => t.type === 'expense')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+      // Transactions up to the end of this month
+      const priorAndCurrentTxs = sortedTxs.filter(t => {
+        const d = new Date(t.date);
+        return d <= monthEnd;
+      });
+
+      const cumulativeIncome = priorAndCurrentTxs
+        .filter(t => t.type === 'income')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+      const cumulativeExpense = priorAndCurrentTxs
+        .filter(t => t.type === 'expense')
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+      const cumulativeRealizedIncome = priorAndCurrentTxs
+        .filter(t => t.type === 'income')
+        .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+
+      const cumulativeRealizedExpense = priorAndCurrentTxs
+        .filter(t => t.type === 'expense')
+        .reduce((sum, t) => sum + calculateRealizedAmount(t), 0);
+
+      const projectedBalance = initialBalance + cumulativeIncome - cumulativeExpense;
+      const realizedBalance = initialBalance + cumulativeRealizedIncome - cumulativeRealizedExpense;
+
+      // Check if this month is strictly in the future relative to current calendar month
+      const isFuture = (year > today.getFullYear()) || (year === today.getFullYear() && month > today.getMonth());
+
       return {
-        name: daysMap[d.getDay()],
-        g: expense,
-        r: income
+        name: label,
+        "Receitas": Number(income.toFixed(2)),
+        "Despesas": Number(expense.toFixed(2)),
+        "Saldo Previsto": Number(projectedBalance.toFixed(2)),
+        "Saldo Realizado": isFuture ? null : Number(realizedBalance.toFixed(2)),
+        isCurrent: year === today.getFullYear() && month === today.getMonth()
       };
     });
-  }, [transactions, creditCardNames, filterAccount]);
+  }, [transactions, cards, calculateRealizedAmount, filterAccount, creditCardNames]);
 
   const pieData = React.useMemo(() => {
     const categories: Record<string, number> = {};
@@ -2468,84 +2627,118 @@ export default function App() {
 
               {/* Main Stats */}
               <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard 
-          title="Saldo Total" 
-          value={summary?.balance || 0} 
-          realizedValue={summary?.realizedBalance}
-          icon={Wallet} 
-          color="bg-stone-900" 
-          tooltip="Seu saldo total planejado (Soma de contas + limite de cartões + receitas - despesas)"
-        />
-        <StatCard 
-          title="Receitas" 
-          value={summary?.income || 0} 
-          realizedValue={summary?.realizedIncome}
-          icon={ArrowUpRight} 
-          color="bg-emerald-500" 
-          tooltip="Total de receitas previstas para o período selecionado"
-        />
-        <StatCard 
-          title="Despesas" 
-          value={summary?.expense || 0} 
-          realizedValue={summary?.realizedExpense}
-          icon={ArrowDownLeft} 
-          color="bg-rose-500" 
-          tooltip="Total de despesas previstas para o período selecionado"
-        />
-                
-                {/* Main Chart */}
-                <Card className="md:col-span-3 h-[400px]">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="font-semibold text-lg">Fluxo de Caixa</h3>
-                    <select className="bg-stone-100 border-none rounded-lg text-sm px-3 py-1 outline-none">
-                      <option>Esta Semana</option>
-                      <option>Este Mês</option>
-                    </select>
-                  </div>
-                  <ResponsiveContainer width="100%" height="80%">
-                    <AreaChart data={chartData}>
-                      <defs>
-                        <linearGradient id="colorR" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.1}/>
-                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#888'}} />
-                      <YAxis hide />
-                      <Tooltip 
-                        contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                      />
-                      <Area type="monotone" dataKey="r" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorR)" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </Card>
+                <StatCard 
+                  title="Receitas" 
+                  value={currentMonthStats.income} 
+                  realizedValue={currentMonthStats.realizedIncome}
+                  icon={ArrowUpRight} 
+                  color="bg-emerald-500" 
+                  tooltip="Total de receitas previstas para o mês em curso"
+                />
+                <StatCard 
+                  title="Despesas" 
+                  value={currentMonthStats.expense} 
+                  realizedValue={currentMonthStats.realizedExpense}
+                  icon={ArrowDownLeft} 
+                  color="bg-rose-500" 
+                  tooltip="Total de despesas previstas para o mês em curso"
+                />
+                <StatCard 
+                  title="Saldo Total" 
+                  value={currentMonthStats.balanceProjected} 
+                  realizedValue={currentMonthStats.balanceRealized}
+                  icon={Wallet} 
+                  color="bg-stone-900" 
+                  tooltip="Seu saldo total planejado para o mês em curso (Soma de contas + limite de cartões + receitas - despesas do mês)"
+                />
+              </div>
 
-                {/* Recent Transactions */}
-                <Card className="md:col-span-3">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="font-semibold text-lg">Últimos Lançamentos</h3>
-                    <button onClick={() => setActiveTab('transactions')} className="text-stone-500 text-sm hover:underline">Ver todos</button>
+              {/* Sidebar / Top Right: Goals */}
+              <div className="lg:col-span-1">
+                <Card className="h-full">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-semibold text-lg">Metas</h3>
+                    <PlusCircle size={18} className="text-stone-400 cursor-pointer" />
                   </div>
-                  <div className="space-y-4">
-                    {transactions
-                      .sort((a, b) => {
-                        if (a.settled !== b.settled) return a.settled ? 1 : -1;
-                        return new Date(b.date).getTime() - new Date(a.date).getTime();
-                      })
-                      .slice(0, 5)
-                      .map((t) => (
-                      <div key={t.id} className={`flex items-center justify-between p-2 hover:bg-stone-50 rounded-2xl transition-all ${t.settled ? 'opacity-40 grayscale-[0.2]' : ''}`}>
-                        <div className="flex items-center gap-4">
-                          <div className={`p-1 w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border border-stone-100 bg-white shadow-sm overflow-hidden ${t.settled ? 'opacity-50' : ''}`}>
-                            {(() => {
-                              const card = cards.find(c => c.name === t.account);
-                              if (card) {
-                                const domain = card.type === 'bank' 
-                                  ? (card.bankLogo || getAutoLogo(card.name))
-                                  : (CARD_BRANDS.find(b => b.id === card.brand)?.logo || card.bankLogo || getAutoLogo(card.name));
-                                  
-                                if (domain) {
+                  <div className="space-y-6">
+                    <div>
+                      <div className="flex justify-between text-sm mb-2">
+                        <span className="font-medium">Reserva de Emergência</span>
+                        <span className="text-stone-500">75%</span>
+                      </div>
+                      <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-500 rounded-full" style={{ width: '75%' }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-sm mb-2">
+                        <span className="font-medium">Viagem Japão</span>
+                        <span className="text-stone-500">12%</span>
+                      </div>
+                      <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 rounded-full" style={{ width: '12%' }} />
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              {/* Main Chart - Spans Full Width */}
+              <Card className="lg:col-span-3 h-[400px]">
+                <div className="flex justify-between items-center mb-6">
+                  <div>
+                    <h3 className="font-semibold text-lg">Evolução do Saldo</h3>
+                    <p className="text-xs text-stone-400">Curva dos últimos e próximos 12 meses</p>
+                  </div>
+                </div>
+                <ResponsiveContainer width="100%" height="80%">
+                  <LineChart data={lineChartData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#888'}} />
+                    <YAxis hide />
+                    <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: 'Saldo Zero', fill: '#ef4444', fontSize: 10, position: 'right' }} />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                      formatter={(value: any, name: string) => {
+                        return [new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value), name];
+                      }}
+                    />
+                    <Legend verticalAlign="top" height={36} iconType="circle" />
+                    <Line type="monotone" dataKey="Saldo Previsto" name="Previsto" stroke="#10b981" strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
+                    <Line type="monotone" dataKey="Saldo Realizado" name="Realizado" stroke="#3b82f6" strokeWidth={3} dot={false} connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </Card>
+
+              {/* Recent Transactions - Spans Full Width */}
+              <Card className="lg:col-span-3">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="font-semibold text-lg">Últimos Lançamentos (Este Mês)</h3>
+                  <button onClick={() => setActiveTab('transactions')} className="text-stone-500 text-sm hover:underline">Ver todos</button>
+                </div>
+                <div className="space-y-4">
+                  {transactions
+                    .filter(t => {
+                      const d = new Date(t.date);
+                      return d.getMonth() === new Date().getMonth() && d.getFullYear() === new Date().getFullYear();
+                    })
+                    .sort((a, b) => {
+                      if (a.settled !== b.settled) return a.settled ? 1 : -1;
+                      return new Date(b.date).getTime() - new Date(a.date).getTime();
+                    })
+                    .slice(0, 5)
+                    .map((t) => (
+                    <div key={t.id} className={`flex items-center justify-between p-2 hover:bg-stone-50 rounded-2xl transition-all ${t.settled ? 'opacity-40 grayscale-[0.2]' : ''}`}>
+                      <div className="flex items-center gap-4">
+                        <div className={`p-1 w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border border-stone-100 bg-white shadow-sm overflow-hidden ${t.settled ? 'opacity-50' : ''}`}>
+                          {(() => {
+                            const card = cards.find(c => c.name === t.account);
+                            if (card) {
+                              const domain = card.type === 'bank' 
+                                ? (card.bankLogo || getAutoLogo(card.name))
+                                : (CARD_BRANDS.find(b => b.id === card.brand)?.logo || card.bankLogo || getAutoLogo(card.name));
+                                
+                              if (domain) {
                                   return (
                                     <img 
                                       src={getCardLogoUrl(domain)} 
@@ -2584,150 +2777,6 @@ export default function App() {
                     ))}
                   </div>
                 </Card>
-              </div>
-
-              {/* Sidebar Info */}
-              <div className="space-y-6">
-                {/* Accounts Summary */}
-                <Card>
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-semibold text-lg">Suas Contas</h3>
-                    <PlusCircle size={18} className="text-stone-400 cursor-pointer" />
-                  </div>
-                  <div className="space-y-4">
-                    {computedCards.filter(c => c.type === 'bank').map((acc: any) => (
-                      <div key={acc.id} className="group">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-white border border-stone-100 rounded-xl flex items-center justify-center shadow-sm overflow-hidden transition-transform group-hover:scale-110">
-                              {(() => {
-                                const domain = acc.bankLogo || acc.logo || getAutoLogo(acc.name);
-                                  
-                                if (domain) {
-                                  return (
-                                    <img 
-                                      src={getCardLogoUrl(domain)} 
-                                      alt="" 
-                                      className="w-6 h-6 object-contain" 
-                                      referrerPolicy="no-referrer" 
-                                      onError={(e) => handleLogoError(e, domain)}
-                                    />
-                                  );
-                                }
-                                return <Wallet size={18} className="text-stone-300" />;
-                              })()}
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-stone-800">{acc.name}</p>
-                              <p className="text-[9px] text-stone-400 uppercase tracking-[0.1em] font-bold">Conta Corrente</p>
-                            </div>
-                          </div>
-                          <p className="font-bold text-sm text-stone-900 tracking-tight" title="Saldo Atual">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.used)}
-                          </p>
-                        </div>
-                        <div className="mt-2 w-full bg-emerald-500/10 h-1 rounded-full overflow-hidden border border-emerald-500/20" title="Uso do Saldo">
-                          <div 
-                            className="h-full bg-rose-500 rounded-full transition-all duration-500 shadow-[0_0_8px_rgba(244,63,94,0.3)]" 
-                            style={{ width: `${Math.max(0, Math.min(100 - (acc.used / (acc.limit || 1)) * 100, 100))}%` }} 
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-
-{/* AI Insights - DEATIVADO TEMPORARIAMENTE
-                <Card className="bg-stone-900 text-white border-none overflow-hidden relative">
-                  <div className="absolute top-0 right-0 p-4 opacity-10">
-                    <Sparkles size={80} />
-                  </div>
-                  <div className="relative z-10">
-                    <div className="flex items-center gap-2 mb-4">
-                      <Sparkles size={18} className="text-emerald-400" />
-                      <h3 className="font-medium text-stone-400 uppercase text-xs tracking-widest">Insights da IA</h3>
-                    </div>
-                    <div className="space-y-4">
-                      {insightError === 'quota' ? (
-                        <div className="border-l-2 border-stone-500/30 pl-4 py-1">
-                          <p className="text-sm font-medium text-stone-400">Insights Temporariamente Indisponíveis</p>
-                          <p className="text-xs text-stone-500 mt-1 leading-relaxed">Atingimos o limite de análise. Eles carregarão novamente em breve.</p>
-                        </div>
-                      ) : insights.length > 0 ? insights.map((insight, idx) => (
-                        <div key={idx} className="border-l-2 border-emerald-500/30 pl-4 py-1">
-                          <p className="text-sm font-medium text-emerald-400">{insight.title}</p>
-                          <p className="text-xs text-stone-400 mt-1 leading-relaxed">{insight.text}</p>
-                        </div>
-                      )) : (
-                        <p className="text-xs text-stone-500 italic">Analisando seus dados...</p>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-                */}
-
-                {/* Category Distribution */}
-                <Card>
-                  <h3 className="font-semibold text-lg mb-4">Gastos por Categoria</h3>
-                  <div className="h-[200px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={pieData}
-                          innerRadius={60}
-                          outerRadius={80}
-                          paddingAngle={5}
-                          dataKey="value"
-                        >
-                          {pieData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="mt-4 space-y-2">
-                    {pieData.map((item, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-sm">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[idx] }} />
-                          <span className="text-stone-600">{item.name}</span>
-                        </div>
-                        <span className="font-medium">R$ {item.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-
-                {/* Goals */}
-                <Card>
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-semibold text-lg">Metas</h3>
-                    <PlusCircle size={18} className="text-stone-400 cursor-pointer" />
-                  </div>
-                  <div className="space-y-6">
-                    <div>
-                      <div className="flex justify-between text-sm mb-2">
-                        <span className="font-medium">Reserva de Emergência</span>
-                        <span className="text-stone-500">75%</span>
-                      </div>
-                      <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-emerald-500 rounded-full" style={{ width: '75%' }} />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-sm mb-2">
-                        <span className="font-medium">Viagem Japão</span>
-                        <span className="text-stone-500">12%</span>
-                      </div>
-                      <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-blue-500 rounded-full" style={{ width: '12%' }} />
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-              </div>
             </motion.div>
           )}
 
